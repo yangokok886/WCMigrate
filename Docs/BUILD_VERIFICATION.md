@@ -14,7 +14,7 @@
 
 `build/WCMigrate-1.0.0-sdk26-adhoc.ipa`
 
-SHA-256：`05dedead4b3f429412ac022624980dd8707b8401549b5c5a3d66634ed5df56a9`
+SHA-256：`6e45985ec6aaf98dd278befd4ba978c400c82908dfc3aeb8424463622554b4d7`
 
 主Mach-O：arm64、LC_BUILD_VERSION平台IOS、SDK26.0、最低17.0。Info.plist版本1.0.0/build11、DTSDKName iphoneos26.0、MinimumOSVersion17.0，与二进制一致。Bundle ID local.xchat.transfer，App Group group.local.xchat.transfer。没有App扩展，因此没有额外扩展Mach-O验收项。
 
@@ -28,7 +28,7 @@ python3 Scripts/verify-ipa.py build/WCMigrate-1.0.0-sdk26-adhoc.ipa
 ./Scripts/package-source.sh
 ```
 
-本机完整日志保存在项目build内（不加入Git）：v100-sdk26-release-verified.log、sdk26-final.log、sdk26-macho.txt、sdk26-signature.log、sdk26-zip-validation.log、v100-final-verification.json。源码包不包含日志、研究克隆、Apple SDK、工具链或个人路径。
+本机完整日志保存在项目build内（不加入Git）：v100-sdk26-source-label-final.log、sdk26-final.log、sdk26-macho.txt、sdk26-signature.log、sdk26-zip-validation.log、v100-final-verification.json。源码包不包含日志、研究克隆、Apple SDK、工具链或个人路径。
 
 72项核心测试（大文件可选项另见测试说明）、ZIP host测试通过；1.0设置界面明/暗模式定向回归通过；前版完整UI回归详见TEST_MATRIX.md。
 

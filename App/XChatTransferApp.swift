@@ -176,7 +176,7 @@ struct InstanceRow: View {
                 Text(instance.displayName).font(.subheadline.weight(.semibold))
                 Text(instance.bundleIdentifier).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                 
-                Text(instance.origin.hasPrefix("独立测试") ? "模拟测试数据 · 非真实微信" : instance.origin).font(.caption2).foregroundStyle(.secondary)
+                Text(instance.origin.hasPrefix("独立测试") ? "模拟测试数据 · 非真实微信" : instance.originDisplayName).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }.frame(maxWidth: .infinity, minHeight: 52, alignment: .leading).padding(.vertical, 5).contentShape(Rectangle())
@@ -188,7 +188,7 @@ struct InstanceDetail: View {
     var body: some View {
         List {
             Section { InstanceRow(instance: instance) }
-            Section("身份信息") { InfoRow(title: "Bundle ID", value: instance.bundleIdentifier); InfoRow(title: "版本 / Build", value: "\(instance.version ?? "未知") / \(instance.build ?? "未知")"); InfoRow(title: "数据来源", value: instance.origin); InfoRow(title: "数据容器", value: instance.root.path); InfoRow(title: "可执行文件", value: instance.executableName ?? "未读取"); InfoRow(title: "安装目录", value: instance.bundlePath ?? "未读取") }
+            Section("身份信息") { InfoRow(title: "Bundle ID", value: instance.bundleIdentifier); InfoRow(title: "版本 / Build", value: "\(instance.version ?? "未知") / \(instance.build ?? "未知")"); InfoRow(title: "数据来源", value: instance.originDisplayName); InfoRow(title: "数据容器", value: instance.root.path); InfoRow(title: "可执行文件", value: instance.executableName ?? "未读取"); InfoRow(title: "安装目录", value: instance.bundlePath ?? "未读取") }
             Section {
                 Button("用作来源") { store.choose(instance, asSource: true) }.disabled(store.busy)
                 Button("用作目标") { store.choose(instance, asSource: false) }.disabled(store.busy)

@@ -192,7 +192,7 @@ import SQLite3
                                 return nil
                             }
                             return AppInstance(id: item["id"]!, displayName: item["name"]!, bundleIdentifier: item["id"]!,
-                            version: item["version"], build: item["build"], root: URL(fileURLWithPath: item["path"]!), origin: "系统容器", executableName: item["executable"], bundlePath: item["bundlePath"]) }
+                            version: item["version"], build: item["build"], root: URL(fileURLWithPath: item["path"]!), origin: "系统容器 · 应用分类v1", executableName: item["executable"], bundlePath: item["bundlePath"]) }
                         continuation.resume(returning: found)
                     } catch { continuation.resume(throwing: error) }
                 }

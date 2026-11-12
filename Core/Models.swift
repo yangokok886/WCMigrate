@@ -22,6 +22,8 @@ public struct AppInstance: Identifiable, Codable, Hashable, Sendable {
     public var build: String?
     public var root: URL
     public var origin: String
+    // Keep the persisted classification marker separate from the displayed source.
+    public var originDisplayName: String { origin.hasPrefix("系统容器") ? "系统容器" : origin }
     public var bookmark: Data?
     public var executableName: String?
     public var bundlePath: String?
