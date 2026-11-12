@@ -12,6 +12,10 @@ final class MigrationUITests: XCTestCase {
         for _ in 0..<3 where !reminder.isHittable { app.swipeUp() }
         XCTAssertTrue(reminder.isHittable)
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "未包含描述文件")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["证书昵称"].exists)
+        XCTAssertTrue(app.staticTexts["证书到期时间"].exists)
+        XCTAssertFalse(app.staticTexts["描述文件"].exists)
+        XCTAssertFalse(app.staticTexts["描述文件到期"].exists)
         shot("32-configuration-and-certificate-settings")
     }
     func testRenamePromptDoesNotBlockMigration() {

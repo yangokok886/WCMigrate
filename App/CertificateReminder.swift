@@ -21,6 +21,16 @@ import Security
         }
         return names.isEmpty ? "描述文件未包含证书" : names.joined(separator: "\n")
     }
+    var certificateExpiryText: String {
+        guard let profile else { return "无法检测" }
+        guard let expires = profile.activeCertificates.compactMap(\.expires).min() else { return "无法解析证书到期时间" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy 年 M 月 d 日 H 时 m 分"
+        return formatter.string(from: expires)
+    }
     func refresh() async {
         do {
             if let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision") {
@@ -122,14 +132,11 @@ struct CertificateReminderSection: View {
                 SettingsRowLabel(title: "证书到期提醒", icon: "bell.badge")
             }.accessibilityIdentifier("certificateReminderToggle")
             SettingsValueRow(title: "证书昵称", icon: "person.text.rectangle", value: reminder.certificateNames, detail: true)
+            SettingsValueRow(title: "证书到期时间", icon: "checkmark.seal", value: reminder.certificateExpiryText, detail: true)
+                .accessibilityIdentifier("certificateExpiryRow")
             if let profile = reminder.profile {
-                SettingsValueRow(title: "描述文件", icon: "doc.badge.gearshape", value: profile.name, detail: true)
-                SettingsValueRow(title: "描述文件到期", icon: "calendar", value: profile.expires.formatted(date: .abbreviated, time: .shortened), detail: true)
-                ForEach(Array(profile.activeCertificates.enumerated()), id: \.offset) { index, certificate in
-                    SettingsValueRow(title: profile.activeCertificates.count > 1 ? "证书 \(index + 1) 到期" : "证书到期", icon: "checkmark.seal", value: certificate.expires?.formatted(date: .abbreviated, time: .shortened) ?? "无法解析证书到期时间", detail: true)
-                }
                 if profile.activeCertificates.count > 1 {
-                    Text("未能唯一匹配实际签名证书，显示允许的证书并按最早到期时间提醒。").font(.caption).foregroundStyle(.secondary)
+                    Text("未能唯一匹配实际签名证书，显示候选证书昵称及其中最早的证书到期时间。").font(.caption).foregroundStyle(.secondary)
                 }
             } else {
                 Text(reminder.status).font(.footnote).foregroundStyle(.secondary)

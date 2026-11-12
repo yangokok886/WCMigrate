@@ -72,3 +72,5 @@ python3 Scripts/verify-ipa.py build/WCMigrate-1.0.1-sdk26-adhoc.ipa
 ## 文件共享（1.0.1）
 
 已开启原位打开和 Documents 文件共享。配置备份保存在「文件 → 我的 iPhone → WCMigrate → 插件配置备份」，更新时迁入原 Application Support 中的备份；冲突时保留旧备份并报告诊断。备份包含 manifest.json 与 payload，修改或删除内容会影响校验/还原；单独放入 plist/ZIP 后仍需在应用内导入。微信与插件实际配置仍位于目标应用的 Library/Preferences。迁移日志等内部状态继续存放 Application Support。
+
+签名信息界面仅展示证书昵称和证书到期时间，日期固定为中文年月日时分，关闭提醒也可查看。提醒内部仍以证书和描述文件较早的截止时间安排，避免描述文件先过期时漏报。
