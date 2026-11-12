@@ -169,7 +169,7 @@ struct MigrationHistoryView: View {
             } message: { Text("请先退出两边应用。将核对原任务、源数据和目标状态；已完成的交换不会重复执行，发现不明变更则停止。") }
     }
 }
-private struct SettingsRowLabel: View {
+struct SettingsRowLabel: View {
     let title: String
     let icon: String
     var body: some View {
@@ -181,7 +181,7 @@ private struct SettingsRowLabel: View {
         }
     }
 }
-private struct SettingsValueRow: View {
+struct SettingsValueRow: View {
     let title: String
     let icon: String
     let value: String
@@ -206,6 +206,7 @@ private struct SettingsValueRow: View {
 }
 struct SettingsView: View {
     @AppStorage("storeIconsEnabled") private var storeIconsEnabled = true
+    @AppStorage("automaticConfigurationRename") private var automaticConfigurationRename = true
     @EnvironmentObject var store: AppStore
     var body: some View {
         List {
@@ -226,6 +227,13 @@ struct SettingsView: View {
             } header: { Text("应用图标") } footer: {
                 Text("本地图标不可用时，向 Apple 查询该应用的 Bundle ID 并下载商店图标。不会上传聊天或配置；分身可能查不到，图标可能与本机版本不同。")
             }
+            Section {
+                Toggle(isOn: $automaticConfigurationRename) { SettingsRowLabel(title: "自动适配配置文件名", icon: "doc.badge.arrow.up") }
+                    .accessibilityIdentifier("automaticConfigurationRename")
+            } header: { Text("配置适配") } footer: {
+                Text("将来源应用的包名.plist 改为目标应用的包名.plist，其他插件文件名保持原样。关闭后询问是否改名；弹窗不暂停迁移，确认后在文件操作完成时处理。已有同名配置会被替换。")
+            }
+            CertificateReminderSection(reminder: store.certificateReminder)
             Section("环境诊断") {
                 SettingsValueRow(title: "支持系统", icon: "iphone", value: "iOS 26–27.2")
                     .accessibilityLabel("支持系统：iOS 26–27.2").accessibilityIdentifier("supportedSystems")
@@ -234,7 +242,7 @@ struct SettingsView: View {
                 SettingsValueRow(title: "容器状态", icon: "checkmark.shield", value: store.accessMessage, detail: true)
             }
             Section("关于 WCMigrate") {
-                SettingsValueRow(title: "版本号", icon: "info.circle", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0")
+                SettingsValueRow(title: "版本号", icon: "info.circle", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.1")
                 SettingsValueRow(title: "作者", icon: "person.crop.circle", value: "Xuegao")
                 Link(destination: URL(string: "https://t.me/xxuegao6")!) {
                     HStack { SettingsRowLabel(title: "TG频道", icon: "paperplane"); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Color.secondary) }

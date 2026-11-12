@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Verify the packaged binary itself, without rewriting Mach-O or Info.plist."""
-import hashlib, json, pathlib, plistlib, struct, subprocess, sys, tempfile, zipfile
+import hashlib, json, pathlib, plistlib, re, struct, subprocess, sys, tempfile, zipfile
 ipa = pathlib.Path(sys.argv[1]).resolve()
+project_text = (pathlib.Path(__file__).resolve().parents[1] / 'project.yml').read_text()
+def project_setting(name):
+    return re.search(r'^\s*' + name + r':\s*[\"\']?([^\s\"\']+)', project_text, re.M).group(1)
 def macho_build(data):
     magic, cpu, subtype, filetype, commands, size, flags, reserved = struct.unpack_from('<8I', data)
     assert magic == 0xFEEDFACF and cpu == 0x100000C, 'Expected arm64 Mach-O'
@@ -25,7 +28,7 @@ with zipfile.ZipFile(ipa) as z:
     assert info['MinimumOSVersion']==build['minimumOS'] and info['DTSDKName']=='iphoneos26.0'
     assert info['CFBundleIdentifier']=='local.xchat.transfer'
     assert info['CFBundleDisplayName']=='WCMigrate' and info['CFBundleName']=='WCMigrate'
-    assert info['CFBundleShortVersionString']=='1.0.0' and info['CFBundleVersion']=='11'
+    assert info['CFBundleShortVersionString']==project_setting('MARKETING_VERSION') and info['CFBundleVersion']==project_setting('CURRENT_PROJECT_VERSION')
     primary=info.get('CFBundleIcons',{}).get('CFBundlePrimaryIcon',{})
     assert primary.get('CFBundleIconName')=='AppIcon', 'Missing native primary app icon'
     assert primary.get('CFBundleIconFiles'), 'Missing icon file list'

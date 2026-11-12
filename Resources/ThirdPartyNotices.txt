@@ -45,3 +45,11 @@ Tests/ArchiveTests.m保留上游ZIP测试，调整include路径。ContainerAcces
 SwiftUI/UIKit/Foundation/Security/ImageIO/CommonCrypto、SQLite及zlib通过Apple SDK/系统库链接，仓库不捆绑这些库的源码、SDK或二进制framework。XcodeGen与Swift工具链属于构建工具。
 
 分发本项目及修改版本时，请保留这些声明、第三方原始版权头和许可证，并履行GPL对应源码义务。上述作者并未因此为WCMigrate提供背书。
+
+
+证书到期提醒参考与感谢
+
+感谢 Apple 的 TN3125 与 UserNotifications 文档，及 fastlane 的描述文件解析思路。新增 Swift/ASN.1 实现为本项目编写，未复制或打包 fastlane/OpenSSL 源码。
+https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles
+https://developer.apple.com/documentation/usernotifications/scheduling-a-notification-locally-from-your-app
+https://github.com/fastlane/fastlane/blob/master/fastlane_core/lib/fastlane_core/provisioning_profile.rb

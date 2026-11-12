@@ -2,6 +2,16 @@ import SwiftUI
 import SQLite3
 
 @MainActor final class AppStore: ObservableObject {
+    let certificateReminder = CertificateReminder()
+    @Published var renameStatus = ""
+    @Published var renameError = false
+    @Published var renamePrompt = false
+    @Published var renameItems: [ConfigurationRename] = []
+    private var renameApproved = false
+    private var renameReady = false
+    private var renameDeclined = false
+    private var renaming = false
+    private let renameQueue: ConfigurationRenameQueue
     @Published var instances: [AppInstance] = []
     @Published var copies: [BackupManifest] = []
     @Published var pendingBackups: [PendingConfigurationBackup] = []
@@ -37,7 +47,13 @@ import SQLite3
     private let discoveryQueue = DispatchQueue(label: "XChatTransfer.discovery", qos: .userInitiated)
     init() {
         support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("XChatTransfer")
-        let initialPreferencesURL = support.appendingPathComponent("PreferencesCopies")
+        renameQueue = ConfigurationRenameQueue(file: support.appendingPathComponent("configuration-renames.json"), prepareAccess: { _ = XCTContainerBridge.prepareRead($0.path) })
+        let legacyPreferencesURL = support.appendingPathComponent("PreferencesCopies")
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        var storageError: Error?
+        let initialPreferencesURL: URL
+        do { initialPreferencesURL = try ConfigurationStorage.prepare(legacy: legacyPreferencesURL, destination: documents.appendingPathComponent("插件配置备份")) }
+        catch { initialPreferencesURL = legacyPreferencesURL; storageError = error }
         preferencesURL = initialPreferencesURL
         preferences = PreferencesService(store: initialPreferencesURL, relativePath: UserDefaults.standard.string(forKey: "configurationPath") ?? "Library/Preferences", prepareAccess: { _ = XCTContainerBridge.prepareRead($0.path) })
         migration = DirectMigrationService(store: support.appendingPathComponent("MigrationTasks"), prepareAccess: { url in _ = XCTContainerBridge.prepareRead(url.path) })
@@ -56,6 +72,9 @@ import SQLite3
         UserDefaults.standard.removeObject(forKey: "configurationStorageBookmark")
         Task {
             await refreshRecords()
+            if let storageError { fail(storageError) }
+            await certificateReminder.refresh()
+            await recoverConfigurationRenames()
             #if !targetEnvironment(simulator)
             if needsApplicationRefresh { await discover() }
             #endif
@@ -74,8 +93,19 @@ import SQLite3
             }
             if ProcessInfo.processInfo.arguments.contains("-ui-demo") {
                 while instances.filter({ $0.origin.hasPrefix("独立测试") }).count < 2 { await makeFixture(); if message != nil { break } }
-                let fixtures = instances.filter { $0.origin.hasPrefix("独立测试") }
+                var fixtures = instances.filter { $0.origin.hasPrefix("独立测试") }
                 if fixtures.count >= 2 {
+                    if ProcessInfo.processInfo.arguments.contains("-ui-rename-demo") {
+                        UserDefaults.standard.set(!ProcessInfo.processInfo.arguments.contains("-ui-rename-ask"), forKey: "automaticConfigurationRename")
+                        for i in 0..<2 {
+                            fixtures[i].bundleIdentifier = i == 0 ? "local.test.wechat" : "local.test.clone"
+                            let directory = fixtures[i].root.appendingPathComponent("Library/Preferences")
+                            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                            let plist = try? PropertyListSerialization.data(fromPropertyList: ["rename-test": i], format: .binary, options: 0)
+                            try? plist?.write(to: directory.appendingPathComponent(fixtures[i].bundleIdentifier + ".plist"))
+                            if let index = instances.firstIndex(where: { $0.id == fixtures[i].id }) { instances[index] = fixtures[i] }
+                        }
+                    }
                     for (i, app) in fixtures.prefix(2).enumerated() {
                         let file = app.root.appendingPathComponent("standalone.txt")
                         if !FileManager.default.fileExists(atPath: file.path) { try? Data("WCMigrate test file \(i)".utf8).write(to: file) }
@@ -293,7 +323,7 @@ import SQLite3
         } catch { fail(error) }
     }
     func startMigration(confirmed: Bool) {
-        guard confirmed, !busy, !scanning, preview != nil else { return }
+        guard confirmed, !busy, !renaming, !scanning, preview != nil else { return }
         estimate.reset(); busy = true; operationFinished = false; operationSucceeded = false; operationIsMigration = true; operationIsConfigurationRestore = false
         progress = BackupProgress("准备直接迁移", 0, 0, 0)
         let selectedMappings = mappings
@@ -305,16 +335,18 @@ import SQLite3
                 let (s, t) = try resolvedPair()
                 let a = s.root.startAccessingSecurityScopedResource(); let b = t.root.startAccessingSecurityScopedResource()
                 defer { if a { s.root.stopAccessingSecurityScopedResource() }; if b { t.root.stopAccessingSecurityScopedResource() } }
+                beginConfigurationRenames(source: s, target: t, mappings: selectedMappings, mode: selectedMode)
                 let result = try await migration.migrate(source: s, target: t, mappings: selectedMappings, mode: selectedMode, preferences: preferences,
                     systemVersion: UIDevice.current.systemVersion, deviceModel: UIDevice.current.model, allowOverwrite: confirmed,
                     progress: { [weak self] p in Task { @MainActor in if self?.busy == true { self?.progress = p } } })
+                await finishConfigurationRenames()
                 operationSucceeded = true; progress = BackupProgress("文件操作校验完成", result.files, result.files, result.bytes, fraction: 1); audit("文件操作校验通过 · 等待应用内验证")
-            } catch { fail(error) }
+            } catch { abandonUnfinishedRename(); fail(error) }
             preview = nil; await refreshRecords()
         }
     }
     func resumeMigration(_ receipt: MigrationReceipt, confirmed: Bool) {
-        guard confirmed, !busy, !scanning else { return }
+        guard confirmed, !busy, !renaming, !scanning else { return }
         estimate.reset(); busy = true; operationFinished = false; operationSucceeded = false
         operationIsMigration = receipt.configurationID == nil; operationIsConfigurationRestore = receipt.configurationID != nil; operationMode = receipt.mode
         progress = BackupProgress("复查中断任务与两边身份", 0, receipt.files, 0)
@@ -326,9 +358,11 @@ import SQLite3
                 a.root = try resolveRoot(a); b.root = try resolveRoot(b)
                 let sa = a.root.startAccessingSecurityScopedResource(), sb = b.root.startAccessingSecurityScopedResource()
                 defer { if sa { a.root.stopAccessingSecurityScopedResource() }; if sb { b.root.stopAccessingSecurityScopedResource() } }
+                beginConfigurationRenames(source: a, target: b, mappings: receipt.mappings, mode: receipt.mode, checkExistence: false)
                 let result = try await migration.resume(receipt.id, source: a, target: b, preferences: preferences) { [weak self] p in Task { @MainActor in if self?.busy == true { self?.progress = p } } }
+                await finishConfigurationRenames()
                 operationSucceeded = true; progress = BackupProgress("文件操作校验完成", result.files, result.files, result.bytes, fraction: 1); audit("中断迁移已继续并校验完成")
-            } catch { fail(error) }
+            } catch { abandonUnfinishedRename(); fail(error) }
             await refreshRecords()
         }
     }
@@ -394,7 +428,7 @@ import SQLite3
         } catch { fail(error) }
     }
     func applyConfiguration(_ copy: BackupManifest, to instance: AppInstance, mode: TransferMode) {
-        guard !busy, mode != .exchange else { return }
+        guard !busy, !renaming, mode != .exchange else { return }
         estimate.reset(); busy = true; operationFinished = false; operationSucceeded = false; operationIsMigration = false; operationIsConfigurationRestore = false
         operationIsConfigurationRestore = true
         progress = BackupProgress("校验并应用配置", 0, copy.files.count, 0)
@@ -403,16 +437,93 @@ import SQLite3
             do {
                 try await preferences.verify(copy)
                 let root = preferencesURL.appendingPathComponent(copy.id.uuidString).appendingPathComponent("payload")
-                let configSource = AppInstance(displayName: "本地配置 · " + copy.instance.displayName, bundleIdentifier: copy.instance.bundleIdentifier, root: root, origin: "本地配置")
+                var configSource = AppInstance(displayName: "本地配置 · " + copy.instance.displayName, bundleIdentifier: copy.instance.bundleIdentifier, root: root, origin: "本地配置")
                 var app = instance; app.root = try resolveRoot(instance)
                 let scope = app.root.startAccessingSecurityScopedResource(); defer { if scope { app.root.stopAccessingSecurityScopedResource() } }
+                if configSource.bundleIdentifier == "导入配置" {
+                    let known = Set(instances.map(\.bundleIdentifier) + ["com.tencent.xin", "com.tencent.qy.xin"])
+                    let matches = known.filter { id in copy.files.contains { $0.path == PreferencesService.relativePath + "/" + id + ".plist" } }
+                    if matches.count == 1 { configSource.bundleIdentifier = matches.first! }
+                    else { audit("导入配置来源包名不唯一或无法识别，保留原文件名；未猜测插件的配置域") }
+                }
                 let mappings = try PreferencesService.restorationMappings(copy, targetPath: configurationPath)
+                beginConfigurationRenames(source: configSource, target: app, mappings: mappings, mode: mode, sourcePreferencesPath: PreferencesService.relativePath)
                 _ = try await migration.migrate(source: configSource, target: app, mappings: mappings, mode: mode, preferences: preferences, systemVersion: UIDevice.current.systemVersion, deviceModel: UIDevice.current.model, allowOverwrite: true, configurationID: copy.id, progress: { [weak self] p in Task { @MainActor in if self?.busy == true { self?.progress = p } } })
+                await finishConfigurationRenames()
                 operationSucceeded = true; progress = BackupProgress("配置已" + mode.title + "到所选应用", copy.files.count, copy.files.count, copy.totalBytes, fraction: 1)
                 audit("配置应用完成 · \(mode.title) · \(instance.bundleIdentifier)")
-            } catch { fail(error) }
+            } catch { abandonUnfinishedRename(); fail(error) }
             await refreshRecords()
         }
+    }
+
+    private var automaticallyRename: Bool { UserDefaults.standard.object(forKey: "automaticConfigurationRename") as? Bool ?? true }
+    var renameExplanation: String {
+        let names = renameItems.map { URL(fileURLWithPath: $0.source).lastPathComponent + " → " + URL(fileURLWithPath: $0.destination).lastPathComponent }.joined(separator: "\n")
+        return names + (operationFinished ? "\n文件操作已结束。" : "\n文件操作继续进行。") + "\n\n是否按目标应用包名改名？已有同名配置将被替换。迁移继续运行；现在确认会在文件操作完成后执行，完成后确认则立即执行。其他插件配置名称保持原样。"
+    }
+    private func beginConfigurationRenames(source: AppInstance, target: AppInstance, mappings: [DirectoryMapping], mode: TransferMode, sourcePreferencesPath: String = "Library/Preferences", checkExistence: Bool = true) {
+        // Pending confirmed work is handled independently of transfer progress.
+        renameItems = []; renameStatus = ""; renameError = false; renameReady = false; renameDeclined = false; renameApproved = automaticallyRename
+        func plan(_ a: AppInstance, _ b: AppInstance, _ maps: [DirectoryMapping], _ path: String) -> [ConfigurationRename] {
+            if checkExistence {
+                let file = a.root.appendingPathComponent(path).appendingPathComponent(a.bundleIdentifier + ".plist")
+                _ = XCTContainerBridge.prepareRead(file.deletingLastPathComponent().path); _ = XCTContainerBridge.prepareRead(file.path)
+                guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+            }
+            return ConfigurationRename.plan(source: a, target: b, mappings: maps, preferencesPath: path)
+        }
+        renameItems = plan(source, target, mappings, sourcePreferencesPath)
+        if mode == .exchange {
+            renameItems += plan(target, source, mappings.map { DirectoryMapping(source: $0.target, target: $0.source) }, "Library/Preferences")
+        }
+        if !renameItems.isEmpty { renameStatus = renameApproved ? "文件校验后将自动适配配置文件名" : "是否适配配置文件名，等待确认（迁移继续）" }
+        renamePrompt = !renameApproved && !renameItems.isEmpty
+    }
+    private func finishConfigurationRenames() async {
+        do {
+            renameItems = try await renameQueue.enqueue(renameItems)
+            renameReady = true
+            if renameItems.isEmpty { renamePrompt = false; renameStatus = "" }
+            if renameDeclined { try await renameQueue.discard(Set(renameItems.map(\.id))); renameItems = [] }
+            else if renameApproved { await applyConfigurationRenames() }
+            else { renamePrompt = !renameItems.isEmpty }
+        } catch { renameError = true; renameStatus = "文件操作完成，配置文件名适配失败，请查看诊断"; renamePrompt = false; audit("文件操作已完成，配置改名待处理：" + error.localizedDescription); diagnostic = String(describing: error); message = "文件操作已完成，配置改名失败，可复制诊断日志。" }
+    }
+    private func abandonUnfinishedRename() {
+        if !renameReady { renamePrompt = false; renameItems = [] }
+    }
+    func confirmConfigurationRename() {
+        renameApproved = true; renamePrompt = false; renameStatus = renameReady ? "正在适配配置文件名" : "已确认，文件校验完成后适配配置文件名"
+        if renameReady { Task { await applyConfigurationRenames() } }
+    }
+    func skipConfigurationRename() {
+        renameDeclined = true; renamePrompt = false; renameStatus = "保留原配置文件名"
+        if renameReady {
+            let ids = Set(renameItems.map(\.id))
+            Task { do { try await renameQueue.discard(ids); renameItems = [] } catch { fail(error) } }
+        }
+    }
+    private func applyConfigurationRenames() async {
+        guard !renaming else { return }; renaming = true
+        defer { renaming = false }
+        do {
+            let count = try await renameQueue.apply(Set(renameItems.map(\.id)))
+            if count > 0 { renameError = false; renameStatus = "已适配配置文件名：\(count) 项"; audit("配置文件名已按目标应用包名适配：\(count) 项") }
+            renameItems = []; renamePrompt = false
+        } catch {
+            renameError = true; renameStatus = "文件操作完成，配置文件名适配失败，请查看诊断"
+            audit("文件操作已完成，配置改名失败：" + String(describing: error))
+            diagnostic = "配置改名失败（已完成的文件操作不会回滚）\n" + String(describing: error)
+            message = "文件操作已完成，但配置改名失败，请查看运行日志。"; renamePrompt = false
+        }
+    }
+    func recoverConfigurationRenames() async {
+        guard !busy, !renaming else { return }
+        do {
+            renameItems = try await renameQueue.pending(); renameReady = true; renameApproved = automaticallyRename; renameDeclined = false
+            if renameApproved { await applyConfigurationRenames() } else { renamePrompt = !renameItems.isEmpty }
+        } catch { fail(error) }
     }
     #if DEBUG
     private func makeFixture() async {

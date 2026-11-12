@@ -1,6 +1,42 @@
 import XCTest
 
 final class MigrationUITests: XCTestCase {
+    func testCertificateAndRenameSettings() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
+        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        let rename = app.switches["automaticConfigurationRename"]
+        for _ in 0..<3 where !rename.isHittable { app.swipeUp() }
+        XCTAssertTrue(rename.isHittable)
+        let reminder = app.switches["certificateReminderToggle"]
+        for _ in 0..<3 where !reminder.isHittable { app.swipeUp() }
+        XCTAssertTrue(reminder.isHittable)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "未包含描述文件")).firstMatch.exists)
+        shot("32-configuration-and-certificate-settings")
+    }
+    func testRenamePromptDoesNotBlockMigration() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-rename-demo", "-ui-rename-ask"]; app.launch()
+        XCTAssertTrue(app.buttons["targetInstance"].waitForExistence(timeout: 15))
+        app.scrollViews.firstMatch.swipeUp(); app.buttons["chooseDirectories"].tap()
+        app.buttons["selectDirectory-Library"].tap(); app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
+        app.buttons["检查并继续"].tap()
+        XCTAssertTrue(app.staticTexts["覆盖前确认"].waitForExistence(timeout: 15))
+        app.scrollViews.firstMatch.swipeUp()
+        app.switches["两个应用均已退出"].tap(); app.switches["确认执行所选操作"].tap()
+        app.buttons["开始迁移"].tap(); app.buttons["确认开始迁移"].tap()
+        let prompt = app.alerts["适配配置文件名"]
+        XCTAssertTrue(prompt.waitForExistence(timeout: 10))
+        // UIKit captures alert message text at presentation. Observe the completed receipt
+        // separately from the host; don't expect an open native alert to refresh its text.
+        let elapsed = expectation(description: "Keep prompt open while transfer proceeds")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { elapsed.fulfill() }
+        wait(for: [elapsed], timeout: 7)
+        shot("33-rename-prompt-transfer-completed")
+        prompt.buttons["确定改名"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "已适配配置文件名：1 项")).firstMatch.waitForExistence(timeout: 10))
+        shot("34-configuration-renamed")
+    }
     private func shot(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }

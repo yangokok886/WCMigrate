@@ -219,6 +219,14 @@ struct ProgressViewScreen: View {
                     }
                 }
                 if store.busy { Label("请勿离开当前页面", systemImage: "iphone").font(.subheadline.weight(.semibold)).foregroundStyle(Color.xctAccent).frame(maxWidth: .infinity).accessibilityIdentifier("stayOnOperationPage").accessibilityValue(UIApplication.shared.isIdleTimerDisabled ? "屏幕常亮已开启" : "屏幕常亮未开启") }
+                if !store.renameStatus.isEmpty && (store.operationIsMigration || store.operationIsConfigurationRestore) {
+                    Panel {
+                        Label(store.renameStatus, systemImage: store.renameError ? "exclamationmark.triangle" : "doc.badge.gearshape")
+                            .font(.subheadline).foregroundStyle(store.renameError ? Color.orange : Color.xctAccent)
+                        if store.renameError { DiagnosticCopyButton(title: "复制配置改名诊断") { store.diagnostic } }
+                        else if !store.busy && !store.renameItems.isEmpty { Button("处理配置文件名") { store.renamePrompt = true }.frame(minHeight: 44) }
+                    }
+                }
                 if store.operationFinished && !store.operationSucceeded {
                     Text(store.message ?? "操作未完成，两边可能已部分更新；请核对任务记录。").font(.subheadline).foregroundStyle(.orange)
                     DisclosureGroup("查看完整诊断", isExpanded: $expandedDiagnostic) {
@@ -227,7 +235,7 @@ struct ProgressViewScreen: View {
                 } else {
                     Text(store.operationIsMigration ? "文件操作完成后，请在两边应用内核对内容。转换会互换所选内容；文件校验不代表应用内兼容。" : "仅处理所选配置目录。请在应用退出时操作，并核对配置生效情况。").font(.subheadline).foregroundStyle(.secondary)
                 }
-            }.navigationTitle(store.operationIsMigration ? store.operationMode.title : "插件配置").navigationBarTitleDisplayMode(.inline)
+            }.modifier(ConfigurationRenameAlert(inProgress: true)).navigationTitle(store.operationIsMigration ? store.operationMode.title : "插件配置").navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) { BottomAction {
                 if store.busy { Button("停止操作", role: .destructive) { store.cancel() }.frame(minHeight: 44); Text("停止不会回滚已覆盖的文件。").font(.caption2).foregroundStyle(.secondary) }
                 else if !store.operationSucceeded {

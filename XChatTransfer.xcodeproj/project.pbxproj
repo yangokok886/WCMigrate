@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		14AA4F4E88D1A137F481485C /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 7CFEE9E173345DB3119E6979 /* libz.tbd */; };
+		16B5D998F2476935B4ABC433 /* ConfigurationRenaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1CB336D2C512B0DBC6FA711 /* ConfigurationRenaming.swift */; };
 		17A079925F05FABD6DE1DE52 /* XCTSystem.c in Sources */ = {isa = PBXBuildFile; fileRef = 11C6DA1442F6E85AE45E40CE /* XCTSystem.c */; };
 		1CC27C891A2D72345743B7A6 /* ApplicationIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBA0BCBC6C8712D4392E308C /* ApplicationIcon.swift */; };
 		2896E61C807766B913D91541 /* XCTContainerBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 0CD78FF6F2C4D36FB2B447AE /* XCTContainerBridge.m */; };
@@ -30,14 +31,17 @@
 		91965D54C67AA9749C940AC1 /* WQArchive.m in Sources */ = {isa = PBXBuildFile; fileRef = E4476F9B34B9CA37C418E02B /* WQArchive.m */; };
 		9E96F6326A443C8C789C30BC /* DiagnosticTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A02ED3AC38925152D999D36 /* DiagnosticTextView.swift */; };
 		A071DC583BB8C9AD50C43085 /* XChatTransferApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FCA17BB2B14A9783C128613 /* XChatTransferApp.swift */; };
+		A985C0F2FAA1E984E35AB42B /* CertificateReminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */; };
 		BF0E05D75ACA5783B60A2C36 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D428DE1AA196761D1644DF0 /* Security.framework */; };
 		C7F43C4C0768CCFAAA0D0434 /* DiagnosticCopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 554BD77293E5C5E926D1D1EC /* DiagnosticCopyButton.swift */; };
 		CA228E17ABECE4D9B70CF84E /* ApplicationListingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C17A1788EBA0E2C529A5C2 /* ApplicationListingPolicy.swift */; };
+		CC08C540A5A62395D763EE16 /* ConfigurationStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5399F43A2D36703616FA6912 /* ConfigurationStorage.swift */; };
 		D891BF6A08D7BB6C18C222FE /* WQLaunchServices.m in Sources */ = {isa = PBXBuildFile; fileRef = 385FCBD61D8FE212670DD705 /* WQLaunchServices.m */; };
 		D8FCC63C3C7D4D996D770D25 /* GPL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 5F8A6B77973E5D50B1A50A1D /* GPL.txt */; };
 		DA3F4B1D597C37E294A4D205 /* WQCore.m in Sources */ = {isa = PBXBuildFile; fileRef = 8DDAA7347C88C604CF2C264F /* WQCore.m */; };
 		DBE3C6B8F3D19981A9B3AE62 /* ConfigurationDocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6141C05237ADD72C68B33E21 /* ConfigurationDocumentPicker.swift */; };
 		E0C01B2CDC820B468F99E2B2 /* WQAccess.m in Sources */ = {isa = PBXBuildFile; fileRef = 58B941E3D472EB8619B0D1DC /* WQAccess.m */; };
+		E1813BB53D626ECF03B55E42 /* ProvisioningProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE73FBDFAB0F892E67A5A14C /* ProvisioningProfile.swift */; };
 		E4EBC3E1797E6C31640045CB /* XCTAppMetadata.m in Sources */ = {isa = PBXBuildFile; fileRef = DF767B10DB27649AAC3B4EEF /* XCTAppMetadata.m */; };
 		E5A04A0FCE22EB2B889CDB79 /* PreferencesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30EA12BFDF0B89E310EDBC4 /* PreferencesService.swift */; };
 		E922C3417F2781F7F86359CF /* MigrationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 779C206AD0CA356DD2BFD5F4 /* MigrationUITests.swift */; };
@@ -72,6 +76,7 @@
 		24182AA27D99858EB488FA2D /* XCTAppMetadata.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XCTAppMetadata.h; sourceTree = "<group>"; };
 		385FCBD61D8FE212670DD705 /* WQLaunchServices.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WQLaunchServices.m; sourceTree = "<group>"; };
 		42BDDC162D3C95C3B7855B02 /* WQCore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WQCore.h; sourceTree = "<group>"; };
+		5399F43A2D36703616FA6912 /* ConfigurationStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationStorage.swift; sourceTree = "<group>"; };
 		554BD77293E5C5E926D1D1EC /* DiagnosticCopyButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticCopyButton.swift; sourceTree = "<group>"; };
 		58B941E3D472EB8619B0D1DC /* WQAccess.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WQAccess.m; sourceTree = "<group>"; };
 		5D9AA1182873DDB5E2F2BCD9 /* PathSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSafety.swift; sourceTree = "<group>"; };
@@ -97,10 +102,13 @@
 		C77F0A604FE80202174E172F /* BridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BridgingHeader.h; sourceTree = "<group>"; };
 		C868E42E3AEAEB53881EC8E2 /* MigrationViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationViews.swift; sourceTree = "<group>"; };
 		CCB38DFC8ADDF618D68C7DA4 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
+		CE73FBDFAB0F892E67A5A14C /* ProvisioningProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvisioningProfile.swift; sourceTree = "<group>"; };
 		D0734F20824D7BF90A123F0D /* XChatTransferUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = XChatTransferUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1CB336D2C512B0DBC6FA711 /* ConfigurationRenaming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationRenaming.swift; sourceTree = "<group>"; };
 		D831D9E26717C3F732699226 /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		DF767B10DB27649AAC3B4EEF /* XCTAppMetadata.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XCTAppMetadata.m; sourceTree = "<group>"; };
 		E4476F9B34B9CA37C418E02B /* WQArchive.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WQArchive.m; sourceTree = "<group>"; };
+		EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificateReminder.swift; sourceTree = "<group>"; };
 		F1546B8E376AEDEEE7FB0D60 /* WQArchive.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WQArchive.h; sourceTree = "<group>"; };
 		F592B600B5A96D9B3E18727B /* DatabaseInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseInspector.swift; sourceTree = "<group>"; };
 		FBA0BCBC6C8712D4392E308C /* ApplicationIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationIcon.swift; sourceTree = "<group>"; };
@@ -227,6 +235,8 @@
 			children = (
 				B9C17A1788EBA0E2C529A5C2 /* ApplicationListingPolicy.swift */,
 				6DB5A39CCB10306115D35FD5 /* BackupService.swift */,
+				D1CB336D2C512B0DBC6FA711 /* ConfigurationRenaming.swift */,
+				5399F43A2D36703616FA6912 /* ConfigurationStorage.swift */,
 				F592B600B5A96D9B3E18727B /* DatabaseInspector.swift */,
 				A1643DA715AC01764BDFA908 /* DiagnosticPages.swift */,
 				706C1E0402C87641B3A31AAD /* DirectMigrationService.swift */,
@@ -235,6 +245,7 @@
 				1365CC1CAD342F2A66FE3370 /* OperationEstimate.swift */,
 				5D9AA1182873DDB5E2F2BCD9 /* PathSafety.swift */,
 				B30EA12BFDF0B89E310EDBC4 /* PreferencesService.swift */,
+				CE73FBDFAB0F892E67A5A14C /* ProvisioningProfile.swift */,
 				10E5F1E3C086EAE83B72CC4F /* StoreIconLookup.swift */,
 			);
 			path = Core;
@@ -246,6 +257,7 @@
 				FBA0BCBC6C8712D4392E308C /* ApplicationIcon.swift */,
 				D831D9E26717C3F732699226 /* AppStore.swift */,
 				0E5667607CB2A56874AA8392 /* BackupViews.swift */,
+				EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */,
 				6141C05237ADD72C68B33E21 /* ConfigurationDocumentPicker.swift */,
 				991224CF8C17324F8F37FFE2 /* DesignSystem.swift */,
 				554BD77293E5C5E926D1D1EC /* DiagnosticCopyButton.swift */,
@@ -358,7 +370,10 @@
 				CA228E17ABECE4D9B70CF84E /* ApplicationListingPolicy.swift in Sources */,
 				6777DB495C498BC44E7F2D9C /* BackupService.swift in Sources */,
 				43E85D23CF33D53D34555C4F /* BackupViews.swift in Sources */,
+				A985C0F2FAA1E984E35AB42B /* CertificateReminder.swift in Sources */,
 				DBE3C6B8F3D19981A9B3AE62 /* ConfigurationDocumentPicker.swift in Sources */,
+				16B5D998F2476935B4ABC433 /* ConfigurationRenaming.swift in Sources */,
+				CC08C540A5A62395D763EE16 /* ConfigurationStorage.swift in Sources */,
 				F486AE25BD68F61E06E2FF0B /* DatabaseInspector.swift in Sources */,
 				5B7DC0B815498CEDDEC717A4 /* DesignSystem.swift in Sources */,
 				C7F43C4C0768CCFAAA0D0434 /* DiagnosticCopyButton.swift in Sources */,
@@ -372,6 +387,7 @@
 				6F64F0DFE8A209FAAB6A1E36 /* OperationEstimate.swift in Sources */,
 				430ED711C07E6C1334F934B5 /* PathSafety.swift in Sources */,
 				E5A04A0FCE22EB2B889CDB79 /* PreferencesService.swift in Sources */,
+				E1813BB53D626ECF03B55E42 /* ProvisioningProfile.swift in Sources */,
 				2A65AC9B92AA5EAE88006401 /* StoreIconLookup.swift in Sources */,
 				E0C01B2CDC820B468F99E2B2 /* WQAccess.m in Sources */,
 				91965D54C67AA9749C940AC1 /* WQArchive.m in Sources */,
@@ -459,7 +475,7 @@
 				CODE_SIGN_ENTITLEMENTS = Resources/AppGroup.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 13;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -479,7 +495,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/WQFiles $(SRCROOT)/ContainerAccess $(SRCROOT)/CSupport/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -564,7 +580,7 @@
 				CODE_SIGN_ENTITLEMENTS = Resources/AppGroup.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 13;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -578,7 +594,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/WQFiles $(SRCROOT)/ContainerAccess $(SRCROOT)/CSupport/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = local.xchat.transfer;

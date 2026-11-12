@@ -1,6 +1,6 @@
 # WCMigrate
 
-适用于 **iOS 26–27.2** 的原生应用沙盒数据迁移工具，主要用于微信及其多开应用。版本 **1.0.0**，支持 iPhone / iPad。
+适用于 **iOS 26–27.2** 的原生应用沙盒数据迁移工具，主要用于微信及其多开应用。版本 **1.0.1**，支持 iPhone / iPad。
 
 [TG频道](https://t.me/xxuegao6) · [GitHub](https://github.com/yangokok886/WCMigrate) · [GPL-3.0-or-later](LICENSE)
 
@@ -43,7 +43,7 @@ xcodebuild -project XChatTransfer.xcodeproj -scheme XChatTransfer \
 ```sh
 SDK26='/absolute/path/iPhoneOS26.0.sdk' \
 XCODE_SOURCE='/Applications/Xcode.app' ./Scripts/build-sdk26.sh
-python3 Scripts/verify-ipa.py build/WCMigrate-1.0.0-sdk26-adhoc.ipa
+python3 Scripts/verify-ipa.py build/WCMigrate-1.0.1-sdk26-adhoc.ipa
 ./Scripts/package-source.sh
 ```
 
@@ -61,3 +61,14 @@ python3 Scripts/verify-ipa.py build/WCMigrate-1.0.0-sdk26-adhoc.ipa
 - 感谢上游本地化贡献者 [iosrxwy](https://github.com/iosrxwy)、[hfip](https://github.com/hfip)、[hooray804](https://github.com/hooray804)。
 
 固定提交、具体文件和引用关系见 [第三方源码与致谢](Docs/THIRD_PARTY_NOTICES.md)。Apple系统框架、zlib、SQLite通过系统SDK链接，仓库不捆绑其源码。
+
+
+### 配置文件名适配与证书到期提醒（build 12）
+
+- 默认自动把来源应用包名对应的 plist 适配为目标应用包名，支持迁移、转换及配置还原；关闭后弹窗确认，文件任务继续运行。
+- 设置可查看描述文件、签名证书名称与到期时间，开启到期提醒后选择提前3/7/15/30天，每天一次系统本地通知。
+- [实现、使用边界和参考致谢](Docs/CONFIGURATION_RENAME_AND_CERTIFICATES.md)。
+
+## 文件共享（1.0.1）
+
+已开启原位打开和 Documents 文件共享。配置备份保存在「文件 → 我的 iPhone → WCMigrate → 插件配置备份」，更新时迁入原 Application Support 中的备份；冲突时保留旧备份并报告诊断。备份包含 manifest.json 与 payload，修改或删除内容会影响校验/还原；单独放入 plist/ZIP 后仍需在应用内导入。微信与插件实际配置仍位于目标应用的 Library/Preferences。迁移日志等内部状态继续存放 Application Support。

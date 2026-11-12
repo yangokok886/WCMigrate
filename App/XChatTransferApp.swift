@@ -6,13 +6,17 @@ import UniformTypeIdentifiers
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene { WindowGroup {
         RootView().environmentObject(store).tint(.xctAccent)
-            .onChange(of: scenePhase) { _, value in if value == .background { store.cancel() } }
+            .onChange(of: scenePhase) { _, value in
+                if value == .background { store.cancel() }
+                if value == .active { Task { await store.certificateReminder.refresh(); await store.recoverConfigurationRenames() } }
+            }
     } }
 }
 struct RootView: View {
     @EnvironmentObject var store: AppStore
     var body: some View {
         NavigationStack { HomeView() }
+            .modifier(ConfigurationRenameAlert(inProgress: false))
             .sheet(isPresented: Binding(get: { store.showDiagnostic && store.progress == nil }, set: { if !$0 { store.showDiagnostic = false; store.message = nil } })) { NavigationStack { DiagnosticView() }.environmentObject(store) }
             .alert("操作信息", isPresented: Binding(get: { store.message != nil && store.progress == nil && !store.showDiagnostic }, set: { if !$0 { store.message = nil } })) {
                 Button("知道了", role: .cancel) { store.message = nil }
@@ -196,5 +200,16 @@ struct InstanceDetail: View {
                 Button("保存此应用插件配置") { store.savePreferences(instance) }.disabled(store.busy)
             } footer: { Text("仅保存设置的配置目录，不备份聊天记录。") }
         }.navigationTitle("应用详情").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct ConfigurationRenameAlert: ViewModifier {
+    @EnvironmentObject var store: AppStore
+    var inProgress: Bool
+    func body(content: Content) -> some View {
+        content.alert("适配配置文件名", isPresented: Binding(get: { store.renamePrompt && (inProgress || store.progress == nil) }, set: { if !$0 { store.renamePrompt = false } })) {
+            Button("暂不改名", role: .cancel) { store.skipConfigurationRename() }
+            Button("确定改名") { store.confirmConfigurationRename() }
+        } message: { Text(store.renameExplanation) }
     }
 }
