@@ -38,7 +38,7 @@ struct LogsView: View {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                         TextField("搜索操作、路径或错误", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("logSearch")
                         if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.accessibilityLabel("清除搜索") }
-                    }.padding(14).background(Color.xctSurface, in: RoundedRectangle(cornerRadius: 14))
+                    }.padding(14).liquidSurface(cornerRadius: 16)
                     Picker("日志分类", selection: $category) {
                         ForEach(["全部", "迁移", "配置", "异常"], id: \.self) { Text($0) }
                     }.pickerStyle(.segmented).accessibilityIdentifier("logCategory")
@@ -51,7 +51,7 @@ struct LogsView: View {
                     Button { Task { await store.probeIconCache() } } label: {
                         toolRow(store.probingIconCache ? "正在探测图标缓存…" : "检测图标缓存（只读）", detail: "查看当前权限与文件格式", icon: "square.stack.3d.up")
                     }.buttonStyle(.plain).accessibilityLabel("检测图标缓存（只读）").disabled(store.probingIconCache || store.busy || store.scanning)
-                }.background(Color.xctSurface, in: RoundedRectangle(cornerRadius: 18))
+                }.liquidSurface(cornerRadius: 20)
                 SectionLabel(title: "操作记录", detail: "\(lines.count) 条")
                 if lines.isEmpty {
                     VStack(spacing: 12) {
@@ -71,19 +71,19 @@ struct LogsView: View {
                                         if !line.detail.isEmpty { Text(line.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.leading) }
                                     }.frame(maxWidth: .infinity, alignment: .leading)
                                     Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).padding(.top, 14)
-                                }.padding(15).background(Color.xctSurface, in: RoundedRectangle(cornerRadius: 16)).contentShape(Rectangle())
+                                }.padding(15).liquidSurface(cornerRadius: 18).contentShape(Rectangle())
                             }.buttonStyle(.plain).accessibilityIdentifier("logEntry-\(line.id)")
                         }
                     }
                 }
             }.frame(maxWidth: 640).padding(20).frame(maxWidth: .infinity)
-        }.background(Color.xctBackground).scrollIndicators(.hidden)
+        }.background { LiquidBackdrop() }.scrollIndicators(.hidden)
             .navigationTitle("运行日志").navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) {
                 BottomAction {
                     HStack(spacing: 12) {
                         DiagnosticCopyButton(title: "复制完整诊断日志") { store.diagnosticText() }
-                        ShareLink(item: store.diagnosticText()) { Image(systemName: "square.and.arrow.up").font(.system(size: 20)).frame(width: 52, height: 52).background(Color.xctSurface, in: RoundedRectangle(cornerRadius: 16)) }.accessibilityLabel("分享诊断日志")
+                        ShareLink(item: store.diagnosticText()) { Image(systemName: "square.and.arrow.up").font(.system(size: 20)).frame(width: 52, height: 52) }.buttonStyle(LiquidActionStyle()).accessibilityLabel("分享诊断日志")
                     }
                 }
             }

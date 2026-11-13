@@ -20,6 +20,7 @@
 		50DCEB5D2F96335215E63402 /* DirectMigrationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706C1E0402C87641B3A31AAD /* DirectMigrationService.swift */; };
 		5B7DC0B815498CEDDEC717A4 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991224CF8C17324F8F37FFE2 /* DesignSystem.swift */; };
 		60882CE5E43248BB94180AC9 /* MigrationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C868E42E3AEAEB53881EC8E2 /* MigrationViews.swift */; };
+		62069205602DB5F108AEDD93 /* DataStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2CF4964A1563BCA479B2680 /* DataStaging.swift */; };
 		664C7B3A67404F459BD98C25 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = CCB38DFC8ADDF618D68C7DA4 /* libsqlite3.tbd */; };
 		6777DB495C498BC44E7F2D9C /* BackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DB5A39CCB10306115D35FD5 /* BackupService.swift */; };
 		6F64F0DFE8A209FAAB6A1E36 /* OperationEstimate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1365CC1CAD342F2A66FE3370 /* OperationEstimate.swift */; };
@@ -30,16 +31,19 @@
 		815CC2263881DCC04D7C7659 /* DiagnosticPages.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1643DA715AC01764BDFA908 /* DiagnosticPages.swift */; };
 		91965D54C67AA9749C940AC1 /* WQArchive.m in Sources */ = {isa = PBXBuildFile; fileRef = E4476F9B34B9CA37C418E02B /* WQArchive.m */; };
 		9E96F6326A443C8C789C30BC /* DiagnosticTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A02ED3AC38925152D999D36 /* DiagnosticTextView.swift */; };
+		9EB620DCFD1BF4B77FAE5115 /* DataStagingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2E592E726D8DFFCAD3974C /* DataStagingViews.swift */; };
 		A071DC583BB8C9AD50C43085 /* XChatTransferApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FCA17BB2B14A9783C128613 /* XChatTransferApp.swift */; };
 		A985C0F2FAA1E984E35AB42B /* CertificateReminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */; };
 		BF0E05D75ACA5783B60A2C36 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D428DE1AA196761D1644DF0 /* Security.framework */; };
 		C7F43C4C0768CCFAAA0D0434 /* DiagnosticCopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 554BD77293E5C5E926D1D1EC /* DiagnosticCopyButton.swift */; };
 		CA228E17ABECE4D9B70CF84E /* ApplicationListingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C17A1788EBA0E2C529A5C2 /* ApplicationListingPolicy.swift */; };
+		CB7A0D7DB8D3DBE9021B5AED /* NativeTabBarGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BB1DFC26773560D4ADA4ECD /* NativeTabBarGeometry.swift */; };
 		CC08C540A5A62395D763EE16 /* ConfigurationStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5399F43A2D36703616FA6912 /* ConfigurationStorage.swift */; };
 		D891BF6A08D7BB6C18C222FE /* WQLaunchServices.m in Sources */ = {isa = PBXBuildFile; fileRef = 385FCBD61D8FE212670DD705 /* WQLaunchServices.m */; };
 		D8FCC63C3C7D4D996D770D25 /* GPL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 5F8A6B77973E5D50B1A50A1D /* GPL.txt */; };
 		DA3F4B1D597C37E294A4D205 /* WQCore.m in Sources */ = {isa = PBXBuildFile; fileRef = 8DDAA7347C88C604CF2C264F /* WQCore.m */; };
 		DBE3C6B8F3D19981A9B3AE62 /* ConfigurationDocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6141C05237ADD72C68B33E21 /* ConfigurationDocumentPicker.swift */; };
+		DF40DA2B4388139FCFB558E7 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA26F6BB888F1CE0ABE2842B /* OnboardingView.swift */; };
 		E0C01B2CDC820B468F99E2B2 /* WQAccess.m in Sources */ = {isa = PBXBuildFile; fileRef = 58B941E3D472EB8619B0D1DC /* WQAccess.m */; };
 		E1813BB53D626ECF03B55E42 /* ProvisioningProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE73FBDFAB0F892E67A5A14C /* ProvisioningProfile.swift */; };
 		E4EBC3E1797E6C31640045CB /* XCTAppMetadata.m in Sources */ = {isa = PBXBuildFile; fileRef = DF767B10DB27649AAC3B4EEF /* XCTAppMetadata.m */; };
@@ -72,6 +76,7 @@
 		10E5F1E3C086EAE83B72CC4F /* StoreIconLookup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoreIconLookup.swift; sourceTree = "<group>"; };
 		11C6DA1442F6E85AE45E40CE /* XCTSystem.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = XCTSystem.c; sourceTree = "<group>"; };
 		1365CC1CAD342F2A66FE3370 /* OperationEstimate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationEstimate.swift; sourceTree = "<group>"; };
+		1BB1DFC26773560D4ADA4ECD /* NativeTabBarGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTabBarGeometry.swift; sourceTree = "<group>"; };
 		1E3D60D24BBC3C1818C1FFB9 /* WQAccess.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WQAccess.h; sourceTree = "<group>"; };
 		24182AA27D99858EB488FA2D /* XCTAppMetadata.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = XCTAppMetadata.h; sourceTree = "<group>"; };
 		385FCBD61D8FE212670DD705 /* WQLaunchServices.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WQLaunchServices.m; sourceTree = "<group>"; };
@@ -96,6 +101,8 @@
 		991224CF8C17324F8F37FFE2 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		A1643DA715AC01764BDFA908 /* DiagnosticPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticPages.swift; sourceTree = "<group>"; };
 		A9C5FE72B584FF403B17AC2A /* DurableJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableJournal.swift; sourceTree = "<group>"; };
+		AA2E592E726D8DFFCAD3974C /* DataStagingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataStagingViews.swift; sourceTree = "<group>"; };
+		B2CF4964A1563BCA479B2680 /* DataStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataStaging.swift; sourceTree = "<group>"; };
 		B30EA12BFDF0B89E310EDBC4 /* PreferencesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesService.swift; sourceTree = "<group>"; };
 		B9C17A1788EBA0E2C529A5C2 /* ApplicationListingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationListingPolicy.swift; sourceTree = "<group>"; };
 		C2E013F1F0E237A27435975F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -108,6 +115,7 @@
 		D831D9E26717C3F732699226 /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		DF767B10DB27649AAC3B4EEF /* XCTAppMetadata.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XCTAppMetadata.m; sourceTree = "<group>"; };
 		E4476F9B34B9CA37C418E02B /* WQArchive.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WQArchive.m; sourceTree = "<group>"; };
+		EA26F6BB888F1CE0ABE2842B /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificateReminder.swift; sourceTree = "<group>"; };
 		F1546B8E376AEDEEE7FB0D60 /* WQArchive.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WQArchive.h; sourceTree = "<group>"; };
 		F592B600B5A96D9B3E18727B /* DatabaseInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseInspector.swift; sourceTree = "<group>"; };
@@ -238,6 +246,7 @@
 				D1CB336D2C512B0DBC6FA711 /* ConfigurationRenaming.swift */,
 				5399F43A2D36703616FA6912 /* ConfigurationStorage.swift */,
 				F592B600B5A96D9B3E18727B /* DatabaseInspector.swift */,
+				B2CF4964A1563BCA479B2680 /* DataStaging.swift */,
 				A1643DA715AC01764BDFA908 /* DiagnosticPages.swift */,
 				706C1E0402C87641B3A31AAD /* DirectMigrationService.swift */,
 				A9C5FE72B584FF403B17AC2A /* DurableJournal.swift */,
@@ -259,11 +268,14 @@
 				0E5667607CB2A56874AA8392 /* BackupViews.swift */,
 				EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */,
 				6141C05237ADD72C68B33E21 /* ConfigurationDocumentPicker.swift */,
+				AA2E592E726D8DFFCAD3974C /* DataStagingViews.swift */,
 				991224CF8C17324F8F37FFE2 /* DesignSystem.swift */,
 				554BD77293E5C5E926D1D1EC /* DiagnosticCopyButton.swift */,
 				0A02ED3AC38925152D999D36 /* DiagnosticTextView.swift */,
 				8ECE060544C2E3CDD1FDB768 /* LogsView.swift */,
 				C868E42E3AEAEB53881EC8E2 /* MigrationViews.swift */,
+				1BB1DFC26773560D4ADA4ECD /* NativeTabBarGeometry.swift */,
+				EA26F6BB888F1CE0ABE2842B /* OnboardingView.swift */,
 				0FCA17BB2B14A9783C128613 /* XChatTransferApp.swift */,
 			);
 			path = App;
@@ -374,6 +386,8 @@
 				DBE3C6B8F3D19981A9B3AE62 /* ConfigurationDocumentPicker.swift in Sources */,
 				16B5D998F2476935B4ABC433 /* ConfigurationRenaming.swift in Sources */,
 				CC08C540A5A62395D763EE16 /* ConfigurationStorage.swift in Sources */,
+				62069205602DB5F108AEDD93 /* DataStaging.swift in Sources */,
+				9EB620DCFD1BF4B77FAE5115 /* DataStagingViews.swift in Sources */,
 				F486AE25BD68F61E06E2FF0B /* DatabaseInspector.swift in Sources */,
 				5B7DC0B815498CEDDEC717A4 /* DesignSystem.swift in Sources */,
 				C7F43C4C0768CCFAAA0D0434 /* DiagnosticCopyButton.swift in Sources */,
@@ -384,6 +398,8 @@
 				73EE2A69C2BF2AD0C02A71F5 /* LogsView.swift in Sources */,
 				60882CE5E43248BB94180AC9 /* MigrationViews.swift in Sources */,
 				EFEC7BA988491D18E70882A3 /* Models.swift in Sources */,
+				CB7A0D7DB8D3DBE9021B5AED /* NativeTabBarGeometry.swift in Sources */,
+				DF40DA2B4388139FCFB558E7 /* OnboardingView.swift in Sources */,
 				6F64F0DFE8A209FAAB6A1E36 /* OperationEstimate.swift in Sources */,
 				430ED711C07E6C1334F934B5 /* PathSafety.swift in Sources */,
 				E5A04A0FCE22EB2B889CDB79 /* PreferencesService.swift in Sources */,
@@ -475,7 +491,7 @@
 				CODE_SIGN_ENTITLEMENTS = Resources/AppGroup.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 27;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -495,7 +511,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/WQFiles $(SRCROOT)/ContainerAccess $(SRCROOT)/CSupport/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -580,7 +596,7 @@
 				CODE_SIGN_ENTITLEMENTS = Resources/AppGroup.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 27;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -594,7 +610,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/WQFiles $(SRCROOT)/ContainerAccess $(SRCROOT)/CSupport/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = local.xchat.transfer;

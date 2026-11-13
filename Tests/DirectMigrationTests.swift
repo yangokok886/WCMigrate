@@ -115,7 +115,7 @@ final class DirectMigrationTests: XCTestCase {
         let task = Task {
             try await service.migrate(source: source, target: target, mappings: maps, preferences: preferences,
                 systemVersion: "test", deviceModel: "test", allowOverwrite: true) { progress in
-                    if progress.stage == "直接传输并校验" { withUnsafeCurrentTask { $0?.cancel() } }
+                    if progress.stage == "系统快速复制 · 核对文件身份" || progress.stage == "复制并校验文件内容" { withUnsafeCurrentTask { $0?.cancel() } }
                 }
         }
         do { _ = try await task.value; XCTFail("cancelled migration completed") } catch is CancellationError {} catch { XCTFail("unexpected error: \(error)") }
@@ -135,6 +135,40 @@ final class DirectMigrationTests: XCTestCase {
         XCTAssertEqual(plan.files, 1)
         let result = try await service.migrate(source: source, target: target, mappings: maps, preferences: PreferencesService(store: root.appendingPathComponent("Copies")), systemVersion: "test", deviceModel: "test", allowOverwrite: true, progress: { _ in })
         XCTAssertEqual(result.state, "filesVerified"); XCTAssertTrue(result.preferences.isEmpty)
+    }
+
+    func testCopiesRemainIndependentWithCloneAndFallback() async throws {
+        for cloning in [true, false] {
+            let source = try instance("source-\(cloning)")
+            let target = try instance("target-\(cloning)")
+            let file = "Documents/chat.db"
+            let data = Data(repeating: 0x5a, count: 8 * 1_048_576)
+            try data.write(to: source.root.appendingPathComponent(file))
+            let service = DirectMigrationService(store: root.appendingPathComponent("Tasks-\(cloning)"), preferCloning: cloning)
+            let result = try await service.migrate(source: source, target: target, mappings: maps,
+                preferences: PreferencesService(store: root.appendingPathComponent("Copies")), systemVersion: "test", deviceModel: "test", allowOverwrite: true, progress: { _ in })
+            XCTAssertEqual(result.state, "filesVerified")
+            XCTAssertEqual(try Data(contentsOf: target.root.appendingPathComponent(file)), data)
+            let handle = try FileHandle(forWritingTo: target.root.appendingPathComponent(file))
+            try handle.write(contentsOf: Data("changed target".utf8)); try handle.close()
+            XCTAssertEqual(try Data(contentsOf: source.root.appendingPathComponent(file)), data)
+            let targetAfter = try Data(contentsOf: target.root.appendingPathComponent(file))
+            let original = try FileHandle(forWritingTo: source.root.appendingPathComponent(file))
+            try original.write(contentsOf: Data("changed source".utf8)); try original.close()
+            XCTAssertEqual(try Data(contentsOf: target.root.appendingPathComponent(file)), targetAfter)
+        }
+    }
+    func testManySmallFilesCopyAndResumeJournalCleanup() async throws {
+        let source = try instance("small-source"), target = try instance("small-target")
+        for i in 0..<2000 { try Data("file \(i)".utf8).write(to: source.root.appendingPathComponent("Documents/\(i)")) }
+        let service = DirectMigrationService(store: root.appendingPathComponent("Tasks"))
+        let started = Date()
+        let result = try await service.migrate(source: source, target: target, mappings: maps,
+            preferences: PreferencesService(store: root.appendingPathComponent("Copies")), systemVersion: "test", deviceModel: "test", allowOverwrite: true, progress: { _ in })
+        print("COPY-BENCH 2001 small files: \(Date().timeIntervalSince(started))s")
+        XCTAssertEqual(result.completedFiles, 2001)
+        for i in 0..<2000 { XCTAssertEqual(try Data(contentsOf: target.root.appendingPathComponent("Documents/\(i)")), Data("file \(i)".utf8)) }
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: target.root.appendingPathComponent("Documents").path).contains { $0.hasPrefix(".xct-") })
     }
 
 }

@@ -12,3 +12,8 @@ int XCTModeIsSymlink(uint32_t mode) { return S_ISLNK(mode); }
 int XCTCloneFile(int sourceFD, const char *destination) { return fclonefileat(sourceFD, AT_FDCWD, destination, 0); }
 
 int XCTModeIsDirectory(uint32_t mode) { return S_ISDIR(mode); }
+
+// Keep POSIX openat in C; older iOS runtimes lack the Swift 6.2 Darwin overlay.
+int XCTOpenDirectoryAt(int parent, const char *name) {
+    return openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+}

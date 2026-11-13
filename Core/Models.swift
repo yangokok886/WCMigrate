@@ -58,10 +58,16 @@ public enum TransferMode: String, Codable, Sendable, CaseIterable, Identifiable 
     public var symbol: String { switch self { case .replace: return "arrow.right.square"; case .exchange: return "arrow.left.arrow.right"; case .merge: return "arrow.triangle.merge" } }
     public var explanation: String {
         switch self {
-        case .replace: return "1 覆盖到 2，清除目标所选文件夹内来源没有的内容；1 保留。"
+        case .replace: return "1 覆盖到 2，清除目标所选文件夹内来源没有的内容。"
         case .exchange: return "双向交换所选文件或文件夹：1 的内容到 2，2 的原内容到 1。"
-        case .merge: return "1 覆盖到 2，同名直接替换，目标独有内容保留；1 保留。"
+        case .merge: return "1 覆盖到 2，同名直接替换，目标独有内容保留。"
         }
+    }
+    public func sourceNote(keepSource: Bool) -> String {
+        self == .exchange ? "两边所选内容互换" : (keepSource ? "来源数据保留" : "直接移动，不保留来源")
+    }
+    public func explanation(keepSource: Bool) -> String {
+        explanation + (self == .exchange ? "转换已使用直接移动，不复制两份数据。" : (keepSource ? "来源所选内容保留。" : "直接移动所选内容，完成后来源不再保留。"))
     }
     public var sourceNote: String { self == .exchange ? "两边所选内容互换" : "来源数据保留" }
 }

@@ -17,4 +17,14 @@ final class OperationEstimateTests: XCTestCase {
         tracker.update(BackupProgress("done", 1, 1, 300, fraction: 1))
         XCTAssertEqual(tracker.fraction, 1); XCTAssertNil(tracker.remaining)
     }
+    func testRecentWindowReplacesStartupRate() {
+        var tracker = OperationEstimate(); let start = Date(timeIntervalSince1970: 1000)
+        for second in 0...100 {
+            let fraction = second < 10 ? Double(second) * 0.001 : 0.01 + Double(second - 10) * 0.005
+            tracker.update(BackupProgress("copy", second, 1000, 0, fraction: fraction), now: start.addingTimeInterval(Double(second)))
+        }
+        XCTAssertEqual(tracker.fraction!, 0.46, accuracy: 0.001)
+        XCTAssertEqual(tracker.remaining!, 112, accuracy: 2)
+    }
+
 }

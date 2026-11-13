@@ -9,6 +9,7 @@ struct ConfigurationShareSheet: UIViewControllerRepresentable {
 }
 struct PreferencesView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var tour: ProductTour
     @AppStorage("backupPlistOnly") private var plistOnly = false
     @State private var pickApplication = false
     @State private var selectedSaveApplication: AppInstance?
@@ -21,22 +22,22 @@ struct PreferencesView: View {
     var body: some View {
         List {
             Section {
-                Button { pathText = store.configurationPath; editPath = true } label: {
+                Button { if !tour.active { pathText = store.configurationPath; editPath = true } } label: {
                     LabeledContent("应用内相对路径", value: store.configurationPath)
                 }
             } header: { Text("配置目录") } footer: { Text("默认保存整个 Library/Preferences，包含隐藏文件、子目录和非 plist。仅在你手动备份时保存，不影响迁移。") }
             Section {
-                Toggle("仅备份 plist 文件", isOn: $plistOnly).accessibilityIdentifier("backupPlistOnly")
+                Toggle("仅备份 plist 文件", isOn: $plistOnly).disabled(tour.active).accessibilityIdentifier("backupPlistOnly")
                 Text("开启后递归保留所有 .plist 及其文件夹层级，忽略其他文件。关闭则保存整个配置目录。").font(.caption).foregroundStyle(.secondary)
-                Button { pickApplication = true } label: { Label("选择应用并备份配置", systemImage: "app.badge.checkmark") }
-                    .accessibilityIdentifier("saveConfigurationChooseApp")
-                Button { importFile = true } label: { Label("导入 plist 或 ZIP 配置", systemImage: "square.and.arrow.down") }.accessibilityIdentifier("importConfigurationFile")
+                Button { if tour.active { tour.advance(.configurationSave) } else { pickApplication = true } } label: { Label("选择应用并备份配置", systemImage: "app.badge.checkmark").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }
+                    .buttonStyle(PathActionStyle()).foregroundStyle(Color.xctAccent).accessibilityIdentifier("saveConfigurationChooseApp").tourTarget("configurationSave")
+                Button { if tour.active { tour.advance(.configurationImport) } else { importFile = true } } label: { Label("导入 plist 或 ZIP 配置", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(PathActionStyle()).foregroundStyle(Color.xctAccent).accessibilityIdentifier("importConfigurationFile").tourTarget("configurationImport")
                 if !store.configurationImportStatus.isEmpty {
                     HStack(spacing: 10) { ProgressView(); Text(store.configurationImportStatus).font(.subheadline).foregroundStyle(.secondary) }
                         .accessibilityIdentifier("configurationImportStatus")
                 }
             }.disabled(store.busy)
-            if !store.pendingBackups.isEmpty {
+            if !tour.active && !store.pendingBackups.isEmpty {
                 Section("未完成的配置备份") {
                     ForEach(store.pendingBackups) { pending in
                         Button { resumeBackup = pending } label: {
@@ -50,7 +51,7 @@ struct PreferencesView: View {
             }
             Section("本地配置 · 左滑分享或删除") {
                 if store.copies.isEmpty { Text("暂无配置。可选择应用备份，或导入配置文件。").font(.footnote).foregroundStyle(.secondary) }
-                ForEach(store.copies) { copy in
+                ForEach(tour.active ? [] : store.copies) { copy in
                     NavigationLink { PreferencesDetail(copy: copy) } label: {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(copy.instance.displayName).font(.subheadline.weight(.medium))
@@ -153,6 +154,7 @@ struct MigrationHistoryView: View {
                 Section {
                     Text(record.mode.title + " · " + record.sourceName + (record.mode == .exchange ? " ⇄ " : " → ") + record.targetName).font(.subheadline.weight(.semibold))
                     Text(record.state == "filesVerified" ? "文件校验完成 · 应用内读取待验证" : "未完成 / 已中断 · 目标可能部分更新").font(.footnote).foregroundStyle(record.state == "filesVerified" ? Color.xctAccent : .orange)
+                    Text(record.mode.sourceNote(keepSource: record.keepSource ?? true)).font(.caption).foregroundStyle(.secondary)
                     Text("\(record.completedFiles) / \(record.files) 个文件 · \(byteText(record.completedBytes))").font(.caption)
                     if let exchanges = record.exchanged, !exchanges.isEmpty { Text("已转换 \(exchanges.count) 组路径").font(.caption).foregroundStyle(.secondary) }
                     if let pending = record.pendingExchange { Text("中断时正在转换：" + pending.source + " ⇄ " + pending.target + "；继续时先核对是否已交换").font(.caption).foregroundStyle(.orange) }
@@ -205,13 +207,14 @@ struct SettingsValueRow: View {
     }
 }
 struct SettingsView: View {
+    @EnvironmentObject var tour: ProductTour
     @AppStorage("storeIconsEnabled") private var storeIconsEnabled = true
     @AppStorage("automaticConfigurationRename") private var automaticConfigurationRename = true
     @EnvironmentObject var store: AppStore
     var body: some View {
         List {
             Section {
-                NavigationLink { PreferencesView() } label: { SettingsRowLabel(title: "插件配置", icon: "slider.horizontal.3") }
+                Button { guard !store.busy else { return }; tour.start() } label: { SettingsRowLabel(title: "新手操作导览", icon: "hand.tap") }.tint(Color.primary).accessibilityIdentifier("replayOnboarding")
                 NavigationLink { MigrationHistoryView() } label: { SettingsRowLabel(title: "迁移记录", icon: "clock.arrow.circlepath") }
                 NavigationLink { LogsView() } label: { SettingsRowLabel(title: "运行日志", icon: "text.alignleft") }
             }
@@ -242,7 +245,7 @@ struct SettingsView: View {
                 SettingsValueRow(title: "容器状态", icon: "checkmark.shield", value: store.accessMessage, detail: true)
             }
             Section("关于 WCMigrate") {
-                SettingsValueRow(title: "版本号", icon: "info.circle", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.1")
+                SettingsValueRow(title: "版本号", icon: "info.circle", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.2")
                 SettingsValueRow(title: "作者", icon: "person.crop.circle", value: "Xuegao")
                 Link(destination: URL(string: "https://t.me/xxuegao6")!) {
                     HStack { SettingsRowLabel(title: "TG频道", icon: "paperplane"); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Color.secondary) }
@@ -254,7 +257,8 @@ struct SettingsView: View {
             Section {
                 NavigationLink { LicenseView() } label: { SettingsRowLabel(title: "开源许可", icon: "doc.text") }
             } header: { Text("开源") } footer: { Text("迁移在本机进行。商店图标回退仅查询 Apple 公开接口。真实应用容器访问与迁移需正确签名后实机验证。") }
-        }.tint(Color.xctAccent).navigationTitle("设置与记录").navigationBarTitleDisplayMode(.inline).task { await store.refreshAccessStatus() }
+        }.tint(Color.xctAccent).navigationTitle("设置与记录").navigationBarTitleDisplayMode(.inline)
+            .task { await store.refreshAccessStatus() }
     }
 }
 struct LicenseView: View {

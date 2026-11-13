@@ -7,16 +7,74 @@ import UniformTypeIdentifiers
     var body: some Scene { WindowGroup {
         RootView().environmentObject(store).tint(.xctAccent)
             .onChange(of: scenePhase) { _, value in
-                if value == .background { store.cancel() }
+                if value == .background { store.cancel(reason: "应用进入后台") }
                 if value == .active { Task { await store.certificateReminder.refresh(); await store.recoverConfigurationRenames() } }
             }
     } }
 }
 struct RootView: View {
+    @AppStorage("hasCompletedProductTourV2") private var completedTour = false
+    @StateObject private var tour = ProductTour()
+    @State private var checkedOnboarding = false
+    @State private var tabFrames: [CGRect] = []
     @EnvironmentObject var store: AppStore
+    private var selection: Binding<AppPage> {
+        Binding(get: { tour.page }, set: { page in
+            guard !store.busy, !tour.active else { return }
+            tour.page = page
+        })
+    }
     var body: some View {
-        NavigationStack { HomeView() }
+        TabView(selection: selection) {
+            ForEach(AppPage.allCases, id: \.self) { page in
+                NavigationStack {
+                    Group {
+                        switch page {
+                        case .migration: HomeView().productTourOverlay()
+                        case .configurations: PreferencesView().productTourOverlay()
+                        case .staging: DataStagingView().productTourOverlay()
+                        case .settings: SettingsView()
+                        }
+                    }
+                }
+                .tabItem { Label(page.title, systemImage: page.icon) }
+                .tag(page)
+            }
+        }
+        .id(tour.session)
+        .background { LiquidBackdrop() }
+        .overlay {
+            // These transparent anchors only position the tutorial around the real UITabBar items.
+            // The system owns the bar, its layout, selection animation and Liquid Glass appearance.
+            ZStack(alignment: .topLeading) {
+                NativeTabBarGeometry(blocked: store.busy || tour.active) { frames in
+                    if frames != tabFrames { tabFrames = frames }
+                }.allowsHitTesting(false).accessibilityHidden(true)
+                if tour.active {
+                    ForEach(Array(AppPage.allCases.enumerated()), id: \.element) { index, page in
+                        if index < tabFrames.count {
+                            let frame = tabFrames[index]
+                            Color.clear.frame(width: frame.width, height: frame.height)
+                                .tourTarget(page == .configurations ? "configurationTab" : page == .staging ? (tour.step == .finish ? "finish" : "stagingTab") : "tab-" + page.rawValue, action: {
+                                    tour.page = page
+                                    if page == .configurations { tour.advance(.configurationTab) }
+                                    if page == .staging { tour.advance(.stagingTab) }
+                                })
+                                .position(x: frame.midX, y: frame.midY)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
+                }
+            }
+        }
+        .productTourOverlay().environmentObject(tour)
             .modifier(ConfigurationRenameAlert(inProgress: false))
+            .onAppear {
+                guard !checkedOnboarding else { return }; checkedOnboarding = true
+                let demo = ProcessInfo.processInfo.arguments.contains("-ui-demo")
+                if ProcessInfo.processInfo.arguments.contains("-ui-onboarding") || (!completedTour && !demo) { tour.start() }
+            }
+            .onChange(of: tour.active) { _, active in if !active { completedTour = true } }
             .sheet(isPresented: Binding(get: { store.showDiagnostic && store.progress == nil }, set: { if !$0 { store.showDiagnostic = false; store.message = nil } })) { NavigationStack { DiagnosticView() }.environmentObject(store) }
             .alert("操作信息", isPresented: Binding(get: { store.message != nil && store.progress == nil && !store.showDiagnostic }, set: { if !$0 { store.message = nil } })) {
                 Button("知道了", role: .cancel) { store.message = nil }
@@ -28,11 +86,19 @@ struct RootView: View {
 }
 struct HomeView: View {
     @EnvironmentObject var store: AppStore
+    @EnvironmentObject var tour: ProductTour
+    private var source: AppInstance? { tour.active ? tour.source : store.source }
+    private var target: AppInstance? { tour.active ? tour.target : store.target }
+    private var selections: Set<String> { tour.active ? tour.selections : store.selections }
+    private var mode: TransferMode { tour.active ? tour.mode : store.transferMode }
+    @State private var tourFiles = false
+    @State private var tourMapping = false
     @State private var picking: PickMode?
+    @State private var showKeepSourceWarning = false
     var body: some View {
-        Screen {
+        Screen(tourStep: tour.step?.rawValue) {
             HStack {
-                Label("WCMigrate", systemImage: "arrow.left.arrow.right").font(.caption.weight(.semibold)).foregroundStyle(Color.xctAccent)
+                Text("WCMigrate").font(.caption.weight(.semibold)).foregroundStyle(Color.xctAccent)
                 Spacer()
                 Text("本机迁移").font(.caption).foregroundStyle(.secondary)
             }
@@ -41,67 +107,119 @@ struct HomeView: View {
                 Text("替换、转换或合并，由你决定数据去向。").font(.subheadline).foregroundStyle(.secondary)
             }.padding(.bottom, 2)
             VStack(spacing: 0) {
-                instanceRow(store.source, source: true)
+                instanceRow(source, source: true)
                 HStack(spacing: 12) {
                     Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
-                    Button { store.swap() } label: { Image(systemName: "arrow.up.arrow.down").font(.system(size: 13, weight: .semibold)).frame(width: 34, height: 34).transferGlass() }.accessibilityLabel("交换来源和目标").disabled(store.busy)
+                    Button { if !tour.active { store.swap() } } label: { Image(systemName: "arrow.up.arrow.down").font(.system(size: 13, weight: .semibold)).frame(width: 34, height: 34).transferGlass() }.accessibilityLabel("交换来源和目标").disabled(store.busy)
                     Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
                 }.padding(.horizontal, 18)
-                instanceRow(store.target, source: false)
-            }.background(Color.xctSurface, in: RoundedRectangle(cornerRadius: 22))
+                instanceRow(target, source: false)
+            }.liquidSurface(cornerRadius: 24)
             VStack(alignment: .leading, spacing: 10) {
                 SectionLabel(title: "操作方式")
-                Picker("操作方式", selection: $store.transferMode) {
+                Picker("操作方式", selection: Binding(get: { mode }, set: { value in if tour.active { tour.mode = value; if value == .exchange { tour.advance(.mode) } } else { store.transferMode = value } })) {
                     ForEach(TransferMode.allCases) { mode in Text(mode.title).tag(mode) }
-                }.pickerStyle(.segmented).accessibilityIdentifier("operationMode").disabled(store.busy)
-                Text(store.transferMode.explanation).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("operationMode").tourTarget("mode", action: { tour.mode = .exchange; tour.advance(.mode) }).disabled(store.busy)
+                Text(mode.explanation(keepSource: store.keepMigrationSource)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             VStack(spacing: 10) {
-                SectionLabel(title: "迁移内容", detail: store.selections.isEmpty ? "由你选择" : "\(store.selections.count) 项")
+                SectionLabel(title: "迁移内容", detail: selections.isEmpty ? "由你选择" : "\(selections.count) 项")
                 VStack(spacing: 0) {
-                    if let source = store.source {
+                    if tour.active {
+                        Button { tourFiles = true; tour.advance(.files) } label: {
+                            HomeOption(icon: "folder", title: "选择文件或文件夹", detail: selections.isEmpty ? "沙盒中的任意文件或文件夹" : selections.sorted().joined(separator: "、"))
+                        }.buttonStyle(.plain).accessibilityIdentifier("chooseDirectories").tourTarget("files", action: { tourFiles = true; tour.advance(.files) })
+                    } else if let source = source {
                         NavigationLink { DirectoryBrowser(instance: source, relative: nil, mode: .source) } label: {
-                            HomeOption(icon: "folder", title: "选择文件或文件夹", detail: store.selections.isEmpty ? "沙盒中的任意文件或文件夹" : store.selections.sorted().joined(separator: "、"))
+                            HomeOption(icon: "folder", title: "选择文件或文件夹", detail: selections.isEmpty ? "沙盒中的任意文件或文件夹" : selections.sorted().joined(separator: "、"))
                         }.buttonStyle(.plain).accessibilityIdentifier("chooseDirectories")
                     } else {
                         Button { picking = PickMode(id: 0) } label: { HomeOption(icon: "folder", title: "选择文件或文件夹", detail: "先选择来源应用") }.buttonStyle(.plain)
                     }
-                    Divider().padding(.leading, 52)
-                    NavigationLink { PreferencesView() } label: { HomeOption(icon: "slider.horizontal.3", title: "插件配置", detail: "手动备份、导入和应用配置") }.buttonStyle(.plain).accessibilityIdentifier("configurationLibrary")
-                }.background(Color.xctSurface, in: RoundedRectangle(cornerRadius: 18))
+                    Divider().padding(.horizontal, 16)
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("保留原文件").font(.body.weight(.medium))
+                            Text(mode == .exchange ? "转换会把两边所选内容互换，使用直接移动。" : (store.keepMigrationSource ? "复制到目标，来源文件继续保留。" : "直接移动到目标，来源文件不再保留；通常更快。"))
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        Toggle("", isOn: Binding(get: { mode != .exchange && store.keepMigrationSource }, set: { enabled in
+                            if enabled { showKeepSourceWarning = true }
+                            else { store.keepMigrationSource = false }
+                        }))
+                            .labelsHidden()
+                            .tint(.xctAccent)
+                            .disabled(store.busy || tour.active || mode == .exchange)
+                            .accessibilityLabel("保留原文件")
+                            .accessibilityIdentifier("keepMigrationSource")
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 14)
+                }.liquidSurface(cornerRadius: 20, interactive: true)
             }
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "bolt.shield").foregroundStyle(Color.xctAccent).padding(.top, 1)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("不创建整份数据备份").font(.footnote.weight(.semibold))
-                    Text("不自动备份聊天或插件配置。替换／合并保留来源，转换互换两边所选内容。").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-            }.padding(.horizontal, 3)
-            HStack {
-                Circle().fill(store.scanning ? Color.orange : Color(uiColor: .tertiaryLabel)).frame(width: 6, height: 6)
+            HStack(spacing: 10) {
+                Circle().fill(store.scanning ? Color.orange : Color(uiColor: .tertiaryLabel)).frame(width: 7, height: 7)
                 Text(store.scanning ? "正在检测应用…" : (store.instances.isEmpty ? "尚未检测本机应用" : "\(store.instances.count) 个可用目录 / 应用")).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("管理应用") { picking = PickMode(id: 2) }.font(.caption.weight(.medium))
             }
+            Button {
+                picking = PickMode(id: 2)
+            } label: {
+                Label("管理应用", systemImage: "square.grid.2x2")
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(LiquidActionStyle())
+            .accessibilityIdentifier("manageApplications")
             if let last = store.records.first {
-                NavigationLink { MigrationHistoryView() } label: { HStack { Image(systemName: "clock.arrow.circlepath"); Text("最近迁移"); Spacer(); Text(last.state == "filesVerified" ? "文件校验完成" : "未完成").foregroundStyle(.secondary); Image(systemName: "chevron.right").font(.caption) }.font(.footnote).padding(.vertical, 8) }.buttonStyle(.plain)
+                NavigationLink { MigrationHistoryView() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "clock.arrow.circlepath").font(.title3)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("最近迁移").font(.headline)
+                            Text(last.state == "filesVerified" ? "文件校验完成" : "未完成任务").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    .padding(16).frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+                }
+                .buttonStyle(LiquidActionStyle())
+                .accessibilityIdentifier("recentMigration")
             }
         }
         .navigationTitle("WCMigrate").navigationBarTitleDisplayMode(.inline)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { NavigationLink { SettingsView() } label: { Image(systemName: "ellipsis.circle") }.accessibilityLabel("设置与记录") } }
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .alert("保留原文件会降低速度", isPresented: $showKeepSourceWarning) {
+            Button("取消", role: .cancel) {}
+            Button("仍然开启") { store.keepMigrationSource = true }
+        } message: {
+            Text("开启后会复制所选文件，来源文件会保留。文件越大，复制耗时越久。")
+        }
+        
         .safeAreaInset(edge: .bottom) {
             BottomAction {
-                NavigationLink { MappingView() } label: { HStack { Text("下一步"); Image(systemName: "arrow.right") } }.buttonStyle(PrimaryButton()).accessibilityIdentifier("nextStep")
-                    .disabled(store.source == nil || store.target == nil || store.selections.isEmpty || store.busy || store.scanning)
+                Group {
+                    if tour.active {
+                        Button { tourMapping = true; tour.advance(.next) } label: { HStack { Text("下一步"); Image(systemName: "arrow.right") } }
+                    } else {
+                        NavigationLink { MappingView() } label: { HStack { Text("下一步"); Image(systemName: "arrow.right") } }
+                    }
+                }.buttonStyle(PrimaryButton()).accessibilityIdentifier("nextStep").tourTarget("next", action: { tourMapping = true; tour.advance(.next) })
+                    .disabled(source == nil || target == nil || selections.isEmpty || store.busy || store.scanning)
                 Text("选择来源 → 选择目标 → 确认迁移").font(.caption2).foregroundStyle(.secondary)
             }
         }
+        .navigationDestination(isPresented: $tourFiles) { DirectoryBrowser(instance: ProductTour.original, relative: nil, mode: .source) }
+        .navigationDestination(isPresented: $tourMapping) { MappingView() }
         .sheet(item: $picking) { mode in
-            NavigationStack { InstancesView(selectSource: mode.id == 2 ? nil : mode.id == 0).toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { picking = nil } } } }.environmentObject(store)
+            if tour.active {
+                TourApplicationPicker(choice: mode.id == 0 ? .sourceChoice : .targetChoice) { app in
+                    if mode.id == 0 { tour.source = app } else { tour.target = app }; picking = nil
+                }
+            } else { NavigationStack { InstancesView(selectSource: mode.id == 2 ? nil : mode.id == 0).toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { picking = nil } } } }.environmentObject(store) }
         }
     }
     private func instanceRow(_ instance: AppInstance?, source: Bool) -> some View {
-        Button { picking = PickMode(id: source ? 0 : 1) } label: {
+        Button { picking = PickMode(id: source ? 0 : 1); if tour.active { tour.advance(source ? .source : .target) } } label: {
             HStack(spacing: 13) {
                 ApplicationIcon(application: instance, size: 46)
                 VStack(alignment: .leading, spacing: 4) {
@@ -112,7 +230,7 @@ struct HomeView: View {
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
             }.padding(18).frame(minHeight: 88).contentShape(Rectangle())
-        }.buttonStyle(.plain).disabled(store.busy).accessibilityIdentifier(source ? "sourceInstance" : "targetInstance")
+        }.buttonStyle(.plain).disabled(store.busy).accessibilityIdentifier(source ? "sourceInstance" : "targetInstance").tourTarget(source ? "source" : "target", action: { picking = PickMode(id: source ? 0 : 1); tour.advance(source ? .source : .target) })
     }
     struct PickMode: Identifiable { var id: Int }
 }

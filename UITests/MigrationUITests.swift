@@ -4,7 +4,7 @@ final class MigrationUITests: XCTestCase {
     func testCertificateAndRenameSettings() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
-        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        XCTAssertTrue(app.buttons["tab-settings"].waitForExistence(timeout: 15)); app.buttons["tab-settings"].tap()
         let rename = app.switches["automaticConfigurationRename"]
         for _ in 0..<3 where !rename.isHittable { app.swipeUp() }
         XCTAssertTrue(rename.isHittable)
@@ -23,7 +23,8 @@ final class MigrationUITests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-rename-demo", "-ui-rename-ask"]; app.launch()
         XCTAssertTrue(app.buttons["targetInstance"].waitForExistence(timeout: 15))
         app.scrollViews.firstMatch.swipeUp(); app.buttons["chooseDirectories"].tap()
-        app.buttons["selectDirectory-Library"].tap(); app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
+        app.buttons["selectDirectory-Library"].tap()
+        app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
         app.buttons["检查并继续"].tap()
         XCTAssertTrue(app.staticTexts["覆盖前确认"].waitForExistence(timeout: 15))
         app.scrollViews.firstMatch.swipeUp()
@@ -42,7 +43,9 @@ final class MigrationUITests: XCTestCase {
         shot("34-configuration-renamed")
     }
     private func shot(_ name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        let screenshot = XCUIScreen.main.screenshot()
+        let attachment = XCTAttachment(screenshot: screenshot); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        if name.hasPrefix("tour-") { try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: "/tmp/wcmigrate-" + name + ".png")) }
     }
     func testMigrationOnlyFlowAndPreferences() throws {
         continueAfterFailure = false
@@ -50,7 +53,8 @@ final class MigrationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "测试目标"), object: app.buttons["targetInstance"])
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
-        XCTAssertEqual(app.tabBars.count, 0)
+        XCTAssertEqual(app.tabBars.count, 1)
+        XCTAssertEqual(app.tabBars.buttons.count, 4)
         XCTAssertFalse(app.staticTexts["备份中心"].exists)
         shot("01-home-light")
         app.scrollViews.firstMatch.swipeUp()
@@ -63,6 +67,8 @@ final class MigrationUITests: XCTestCase {
         shot("03-mapping")
         app.buttons["检查并继续"].tap()
         XCTAssertTrue(app.staticTexts["覆盖前确认"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["按所选路径迁移"].exists)
+        XCTAssertTrue(app.staticTexts["替换 · 开始后统计文件与空间"].exists)
         shot("04-preview")
         app.scrollViews.firstMatch.swipeUp()
         app.switches["两个应用均已退出"].tap()
@@ -79,7 +85,8 @@ final class MigrationUITests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons["nextStep"].isHittable)
-        XCTAssertEqual(app.tabBars.count, 0)
+        XCTAssertEqual(app.tabBars.count, 1)
+        XCTAssertEqual(app.tabBars.buttons.count, 4)
         shot("06-home-layout")
         app.scrollViews.firstMatch.swipeUp()
         XCTAssertTrue(app.buttons["nextStep"].isHittable)
@@ -110,7 +117,8 @@ final class MigrationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["targetInstance"].waitForExistence(timeout: 15))
         app.segmentedControls["operationMode"].buttons["转换"].tap()
         app.scrollViews.firstMatch.swipeUp(); app.buttons["chooseDirectories"].tap()
-        app.buttons["selectDirectory-standalone.txt"].tap(); app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
+        app.buttons["selectDirectory-standalone.txt"].tap()
+        app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
         XCTAssertTrue(app.buttons["检查并继续"].isEnabled); app.buttons["检查并继续"].tap()
         XCTAssertTrue(app.staticTexts["覆盖前确认"].waitForExistence(timeout: 10))
         app.scrollViews.firstMatch.swipeUp()
@@ -138,7 +146,7 @@ final class MigrationUITests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-config-import"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
         app.scrollViews.firstMatch.swipeUp()
-        app.buttons["configurationLibrary"].tap()
+        app.buttons["tab-configurations"].tap()
         XCTAssertTrue(app.buttons["saveConfigurationChooseApp"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["更换备份保存位置"].exists)
         XCTAssertFalse(app.staticTexts["当前保存位置"].exists)
@@ -160,7 +168,7 @@ final class MigrationUITests: XCTestCase {
     }
     func testSettingsHasNoFixtureCreator() {
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
-        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        XCTAssertTrue(app.buttons["tab-settings"].waitForExistence(timeout: 15)); app.buttons["tab-settings"].tap()
         app.swipeUp(); XCTAssertFalse(app.buttons["创建可丢弃测试应用"].exists)
         XCTAssertFalse(app.staticTexts["配置副本位置"].exists)
         XCTAssertFalse(app.staticTexts["界面"].exists)
@@ -177,7 +185,7 @@ final class MigrationUITests: XCTestCase {
     func testIconCacheReadOnlyDiagnostic() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
-        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        XCTAssertTrue(app.buttons["tab-settings"].waitForExistence(timeout: 15)); app.buttons["tab-settings"].tap()
         app.buttons["运行日志"].tap()
         let probe = app.buttons["检测图标缓存（只读）"]
         for _ in 0..<8 { if probe.isHittable { break }; app.swipeUp() }
@@ -192,7 +200,7 @@ final class MigrationUITests: XCTestCase {
     func testLogSearchFilterAndDetail() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-log-demo"]; app.launch()
-        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        XCTAssertTrue(app.buttons["tab-settings"].waitForExistence(timeout: 15)); app.buttons["tab-settings"].tap()
         app.buttons["运行日志"].tap()
         XCTAssertTrue(app.textFields["logSearch"].waitForExistence(timeout: 5))
         shot("22-logs-overview")
@@ -228,7 +236,8 @@ final class MigrationUITests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
         app.scrollViews.firstMatch.swipeUp(); app.buttons["chooseDirectories"].tap()
-        app.buttons["selectDirectory-Documents"].tap(); app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
+        app.buttons["selectDirectory-Documents"].tap()
+        app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
         XCTAssertTrue(app.buttons["检查并继续"].isEnabled)
         XCTAssertFalse(app.buttons["samePath-Documents"].exists)
         app.buttons["manualPath-Documents"].tap()
@@ -244,7 +253,7 @@ final class MigrationUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-no-selection"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
-        app.scrollViews.firstMatch.swipeUp(); app.buttons["configurationLibrary"].tap()
+        app.buttons["tab-configurations"].tap()
         app.buttons["saveConfigurationChooseApp"].tap()
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "application-")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10)); row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
@@ -257,7 +266,8 @@ final class MigrationUITests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
         app.scrollViews.firstMatch.swipeUp(); app.buttons["chooseDirectories"].tap()
-        app.buttons["selectDirectory-Documents"].tap(); app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
+        app.buttons["selectDirectory-Documents"].tap()
+        app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
         app.buttons["manualPath-Documents"].tap()
         let field = app.alerts.textFields.firstMatch; XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Documents".count) + "../outside")
@@ -271,7 +281,7 @@ final class MigrationUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
-        app.scrollViews.firstMatch.swipeUp(); app.buttons["configurationLibrary"].tap()
+        app.buttons["tab-configurations"].tap()
         for (file, name) in [("PickerBundle", "PickerBundle"), ("PickerPlugin", "PickerPlugin")] {
             app.buttons["importConfigurationFile"].tap()
             XCTAssertTrue(app.tabBars.buttons["浏览"].waitForExistence(timeout: 10))
@@ -295,7 +305,7 @@ final class MigrationUITests: XCTestCase {
     func testLargeDiagnosticVisibleInBothScreens() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-long-diagnostic"]; app.launch()
-        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        XCTAssertTrue(app.buttons["tab-settings"].waitForExistence(timeout: 15)); app.buttons["tab-settings"].tap()
         app.buttons["运行日志"].tap(); app.buttons["rawDiagnostics"].tap()
         app.buttons["查看原始授权与图标日志"].tap()
         let raw = app.textViews["rawDiagnosticBody"]
@@ -329,7 +339,7 @@ final class MigrationUITests: XCTestCase {
         shot("30-operation-progress")
         app.terminate(); app.launchArguments = ["-ui-demo"]; app.launch()
         XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 15))
-        app.scrollViews.firstMatch.swipeUp(); app.buttons["configurationLibrary"].tap()
+        app.buttons["tab-configurations"].tap()
         XCTAssertTrue(app.switches["backupPlistOnly"].waitForExistence(timeout: 5))
         app.switches["backupPlistOnly"].tap()
         shot("31-plist-only-toggle")
@@ -337,13 +347,86 @@ final class MigrationUITests: XCTestCase {
     func testResumeInterruptedExchangeFromHistory() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-resume-demo"]; app.launch()
-        XCTAssertTrue(app.buttons["设置与记录"].waitForExistence(timeout: 15)); app.buttons["设置与记录"].tap()
+        XCTAssertTrue(app.buttons["tab-settings"].waitForExistence(timeout: 15)); app.buttons["tab-settings"].tap()
         app.buttons["迁移记录"].tap()
         let resume = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "resumeMigration-")).firstMatch
         XCTAssertTrue(resume.waitForExistence(timeout: 10)); shot("32-resume-history"); resume.tap()
         app.alerts.buttons["检查并继续"].tap()
         XCTAssertTrue(app.staticTexts["文件迁移完成"].waitForExistence(timeout: 15))
         shot("33-resume-result")
+    }
+
+    func testProductTourUsesRealControlsWithoutChangingData() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-no-selection", "-ui-onboarding"]; app.launch()
+        XCTAssertTrue(app.staticTexts["tourTitle"].waitForExistence(timeout: 15))
+        shot("tour-01-source")
+        app.buttons["sourceInstance"].tap(); app.buttons["tourApplicationChoice"].tap()
+        app.buttons["targetInstance"].tap(); app.buttons["tourApplicationChoice"].tap()
+        app.segmentedControls.buttons["转换"].tap()
+        app.buttons["chooseDirectories"].tap()
+        app.buttons["selectDirectory-Documents"].tap(); app.buttons["selectDirectory-Library"].tap()
+        XCTAssertEqual(app.staticTexts["tourTitle"].label, "点“完成”回去")
+        app.buttons["完成"].tap(); app.buttons["nextStep"].tap()
+        XCTAssertEqual(app.staticTexts["tourTitle"].label, "这里核对对应路径")
+        shot("tour-02-mapping")
+        app.buttons["检查并继续"].tap(); app.buttons["tab-configurations"].tap()
+        XCTAssertEqual(app.staticTexts["tourTitle"].label, "保存配置从这里开始")
+        app.buttons["saveConfigurationChooseApp"].tap()
+        XCTAssertEqual(app.staticTexts["tourTitle"].label, "别人给的配置从这里导入")
+        app.buttons["importConfigurationFile"].tap()
+        app.buttons["tab-staging"].tap(); app.buttons["createStaging"].tap()
+        app.buttons["stagingSource"].tap(); app.buttons["tourApplicationChoice"].tap()
+        XCTAssertEqual(app.staticTexts["tourTitle"].label, "操作前先退出旧微信")
+        shot("tour-03-staging")
+        app.switches["来源应用已退出后台"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        app.switches["了解这是移动，并保留 WCMigrate"].coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(app.staticTexts["tourTitle"].label, "最后才检查并暂存")
+        app.buttons["检查并暂存"].tap()
+        shot("tour-04-finished")
+        app.buttons["finishTour"].tap()
+        XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["sourceInstance"].label.contains("选择来源"))
+        XCTAssertFalse(app.buttons["nextStep"].isEnabled)
+        XCTAssertFalse(app.staticTexts["stayOnOperationPage"].exists)
+    }
+    func testProductTourNextButtonCompletesEveryStep() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-no-selection", "-ui-onboarding"]; app.launch()
+        XCTAssertTrue(app.buttons["tourNext"].waitForExistence(timeout: 15))
+        for step in 1...21 {
+            XCTAssertTrue(app.buttons["tourNext"].waitForExistence(timeout: 5), "缺少下一步：第 \(step) 步")
+            app.buttons["tourNext"].tap()
+        }
+        XCTAssertTrue(app.buttons["finishTour"].waitForExistence(timeout: 5))
+        shot("tour-next-button-finish")
+        app.buttons["finishTour"].tap()
+        let reset = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "选择来源"), object: app.buttons["sourceInstance"])
+        XCTAssertEqual(XCTWaiter.wait(for: [reset], timeout: 5), .completed)
+        XCTAssertFalse(app.buttons["nextStep"].isEnabled)
+        app.buttons["tab-settings"].tap(); app.buttons["replayOnboarding"].tap()
+        app.buttons["tourNext"].tap()
+        XCTAssertTrue(app.buttons["tourApplicationChoice"].waitForExistence(timeout: 5))
+        app.buttons["skipOnboarding"].tap()
+        XCTAssertTrue(app.buttons["sourceInstance"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["tourNext"].exists)
+    }
+    func testProductTourSkipReplayAndSeparatePages() {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["-ui-demo", "-ui-no-selection", "-ui-onboarding"]; app.launch()
+        XCTAssertTrue(app.buttons["skipOnboarding"].waitForExistence(timeout: 15)); app.buttons["skipOnboarding"].tap()
+        XCTAssertFalse(app.buttons["createStaging"].exists)
+        XCTAssertFalse(app.buttons["saveConfigurationChooseApp"].exists)
+        app.buttons["tab-configurations"].tap()
+        XCTAssertTrue(app.buttons["saveConfigurationChooseApp"].exists)
+        XCTAssertFalse(app.buttons["sourceInstance"].exists)
+        app.buttons["tab-staging"].tap(); app.buttons["createStaging"].tap()
+        XCTAssertFalse(app.buttons["检查并暂存"].isEnabled)
+        shot("tour-05-real-staging")
+        app.buttons["tab-settings"].tap(); app.buttons["replayOnboarding"].tap()
+        XCTAssertTrue(app.staticTexts["tourTitle"].waitForExistence(timeout: 5))
+        app.buttons["skipOnboarding"].tap()
+        XCTAssertTrue(app.buttons["sourceInstance"].exists)
     }
 
 }

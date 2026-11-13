@@ -13,6 +13,9 @@ import SQLite3
     private var renaming = false
     private let renameQueue: ConfigurationRenameQueue
     @Published var instances: [AppInstance] = []
+    @Published var stagedData: [StagedData] = []
+    @Published var stagingOperationTitle: String?
+    let staging: DataStagingService
     @Published var copies: [BackupManifest] = []
     @Published var pendingBackups: [PendingConfigurationBackup] = []
     @Published var records: [MigrationReceipt] = []
@@ -21,12 +24,13 @@ import SQLite3
     @Published var target: AppInstance?
     @Published var selections: Set<String> = []
     @Published var mappings: [DirectoryMapping] = []
+    @Published var keepMigrationSource = false { didSet { preview = nil } }
     @Published var transferMode: TransferMode = .replace { didSet { preview = nil } }
     @Published var busy = false { didSet { UIApplication.shared.isIdleTimerDisabled = busy } }
     @Published var configurationImportStatus = ""
     @Published var scanning = false
     @Published var estimate = OperationEstimate()
-    @Published var progress: BackupProgress? { didSet { if let progress { estimate.update(progress) } else { estimate.reset() } } }
+    @Published var progress: BackupProgress? { didSet { if let progress { estimate.update(progress) } else { estimate.reset(); stagingOperationTitle = nil } } }
     @Published var message: String?
     @Published var accessMessage = "尚未检测容器访问能力"
     @Published var logs: [String] = []
@@ -57,6 +61,7 @@ import SQLite3
         preferencesURL = initialPreferencesURL
         preferences = PreferencesService(store: initialPreferencesURL, relativePath: UserDefaults.standard.string(forKey: "configurationPath") ?? "Library/Preferences", prepareAccess: { _ = XCTContainerBridge.prepareRead($0.path) })
         migration = DirectMigrationService(store: support.appendingPathComponent("MigrationTasks"), prepareAccess: { url in _ = XCTContainerBridge.prepareRead(url.path) })
+        staging = DataStagingService(root: documents.appendingPathComponent("数据暂存"), ownContainer: documents.deletingLastPathComponent(), migration: migration)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         try? (support as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
         var needsApplicationRefresh = false
@@ -266,7 +271,15 @@ import SQLite3
         }.value
     }
     func refreshRecords() async {
-        do { copies = try await preferences.list(); records = try await migration.history(); pendingBackups = try await preferences.pendingBackups() } catch { fail(error) }
+        do { copies = try await preferences.list(); records = try await migration.history(); pendingBackups = try await preferences.pendingBackups(); stagedData = try await staging.list() } catch { fail(error) }
+    }
+    @discardableResult
+    func deleteStagedData(_ record: StagedData) async -> Bool {
+        guard !busy, !scanning, !renaming else { return false }
+        busy = true
+        defer { busy = false }
+        do { try await staging.delete(record.id); await refreshRecords(); return true }
+        catch { fail(error); return false }
     }
     func savePreferences(_ instance: AppInstance) {
         guard !busy, !scanning else { return }
@@ -319,7 +332,7 @@ import SQLite3
             let (s, t) = try resolvedPair()
             let a = s.root.startAccessingSecurityScopedResource(); let b = t.root.startAccessingSecurityScopedResource()
             defer { if a { s.root.stopAccessingSecurityScopedResource() }; if b { t.root.stopAccessingSecurityScopedResource() } }
-            preview = try await migration.preview(source: s, target: t, mappings: mappings, mode: transferMode)
+            preview = try await migration.preview(source: s, target: t, mappings: mappings, mode: transferMode, keepSource: keepMigrationSource, detailed: false)
         } catch { fail(error) }
     }
     func startMigration(confirmed: Bool) {
@@ -328,6 +341,7 @@ import SQLite3
         progress = BackupProgress("准备直接迁移", 0, 0, 0)
         let selectedMappings = mappings
         let selectedMode = transferMode
+        let selectedKeepSource = keepMigrationSource
         operationMode = selectedMode
         operation = Task {
             defer { busy = false; operationFinished = true; operation = nil }
@@ -336,8 +350,9 @@ import SQLite3
                 let a = s.root.startAccessingSecurityScopedResource(); let b = t.root.startAccessingSecurityScopedResource()
                 defer { if a { s.root.stopAccessingSecurityScopedResource() }; if b { t.root.stopAccessingSecurityScopedResource() } }
                 beginConfigurationRenames(source: s, target: t, mappings: selectedMappings, mode: selectedMode)
-                let result = try await migration.migrate(source: s, target: t, mappings: selectedMappings, mode: selectedMode, preferences: preferences,
+                let result = try await migration.migrate(source: s, target: t, mappings: selectedMappings, mode: selectedMode, keepSource: selectedKeepSource, preferences: preferences,
                     systemVersion: UIDevice.current.systemVersion, deviceModel: UIDevice.current.model, allowOverwrite: confirmed,
+                    diagnostic: { [weak self] text in Task { @MainActor in self?.audit(text) } },
                     progress: { [weak self] p in Task { @MainActor in if self?.busy == true { self?.progress = p } } })
                 await finishConfigurationRenames()
                 operationSucceeded = true; progress = BackupProgress("文件操作校验完成", result.files, result.files, result.bytes, fraction: 1); audit("文件操作校验通过 · 等待应用内验证")
@@ -346,6 +361,9 @@ import SQLite3
         }
     }
     func resumeMigration(_ receipt: MigrationReceipt, confirmed: Bool) {
+        if confirmed, let staged = stagedData.first(where: { ($0.state == .incoming && $0.incomingTask == receipt.id) || ($0.state == .returning && $0.returnTask == receipt.id) }) {
+            resumeStagedData(staged); return
+        }
         guard confirmed, !busy, !renaming, !scanning else { return }
         estimate.reset(); busy = true; operationFinished = false; operationSucceeded = false
         operationIsMigration = receipt.configurationID == nil; operationIsConfigurationRestore = receipt.configurationID != nil; operationMode = receipt.mode
@@ -366,18 +384,88 @@ import SQLite3
             await refreshRecords()
         }
     }
-    func cancel() { operation?.cancel() }
+    func stageData(from application: AppInstance, paths: Set<String>, keepSource: Bool = false) {
+        guard !busy, !scanning, !renaming else { return }
+        runStaging(title: "数据暂存") {
+            var source = application; source.root = try self.resolveRoot(source)
+            let scoped = source.root.startAccessingSecurityScopedResource()
+            defer { if scoped { source.root.stopAccessingSecurityScopedResource() } }
+            let record = try await self.staging.create(source: source, selections: paths.sorted(), keepSource: keepSource)
+            return try await self.staging.run(record.id, preferences: self.preferences,
+                systemVersion: UIDevice.current.systemVersion, deviceModel: UIDevice.current.model, diagnostic: self.stagingDiagnostic(), progress: self.stagingProgress())
+        }
+    }
+    func returnStagedData(_ record: StagedData, to application: AppInstance) {
+        guard !busy, !scanning, !renaming else { return }
+        runStaging(title: "数据迁回") {
+            var target = application; target.root = try self.resolveRoot(target)
+            let scoped = target.root.startAccessingSecurityScopedResource()
+            defer { if scoped { target.root.stopAccessingSecurityScopedResource() } }
+            let source = try await self.staging.application(for: record.id)
+            try await self.staging.beginReturn(record.id, target: target)
+            self.beginConfigurationRenames(source: source, target: target, mappings: record.mappings, mode: .replace)
+            let result = try await self.staging.run(record.id, preferences: self.preferences,
+                systemVersion: UIDevice.current.systemVersion, deviceModel: UIDevice.current.model, diagnostic: self.stagingDiagnostic(), progress: self.stagingProgress())
+            await self.finishConfigurationRenames()
+            return result
+        }
+    }
+    func resumeStagedData(_ record: StagedData) {
+        guard !busy, !scanning, !renaming else { return }
+        runStaging(title: record.state == .incoming ? "数据暂存" : "数据迁回") {
+            // Resolve access again, but do not substitute a new container into a partially moved task.
+            let external = record.state == .incoming ? record.application : record.returnTarget
+            guard let external else { throw TransferError.corruptBackup }
+            let root = try self.resolveRoot(external)
+            let scoped = root.startAccessingSecurityScopedResource()
+            defer { if scoped { root.stopAccessingSecurityScopedResource() } }
+            if record.state == .returning, let target = record.returnTarget {
+                let source = try await self.staging.application(for: record.id)
+                self.beginConfigurationRenames(source: source, target: target, mappings: record.mappings, mode: .replace, checkExistence: false)
+            }
+            let result = try await self.staging.run(record.id, preferences: self.preferences,
+                systemVersion: UIDevice.current.systemVersion, deviceModel: UIDevice.current.model, diagnostic: self.stagingDiagnostic(), progress: self.stagingProgress())
+            if record.state == .returning { await self.finishConfigurationRenames() }
+            return result
+        }
+    }
+    private func stagingDiagnostic() -> @Sendable (String) -> Void {
+        { [weak self] text in Task { @MainActor in self?.audit(text) } }
+    }
+    private func stagingProgress() -> @Sendable (BackupProgress) -> Void {
+        { [weak self] p in Task { @MainActor in if self?.busy == true { self?.progress = p } } }
+    }
+    private func runStaging(title: String, action: @escaping @MainActor () async throws -> MigrationReceipt) {
+        estimate.reset(); busy = true; operationFinished = false; operationSucceeded = false
+        operationIsMigration = true; operationIsConfigurationRestore = false; operationMode = .exchange
+        stagingOperationTitle = title; progress = BackupProgress("检查权限和暂存任务", 0, 0, 0)
+        operation = Task {
+            defer { busy = false; operationFinished = true; operation = nil }
+            do {
+                let receipt = try await action()
+                operationSucceeded = true
+                progress = BackupProgress(title + "校验完成", receipt.files, receipt.files, receipt.bytes, fraction: 1)
+                audit(title + " · 所选路径文件操作校验完成；需在目标应用内确认兼容性")
+            } catch { abandonUnfinishedRename(); fail(error) }
+            await refreshRecords()
+        }
+    }
+    func cancel(reason: String = "用户点击停止") {
+        guard let operation, !operation.isCancelled else { return }
+        audit("请求停止操作 · " + reason)
+        operation.cancel()
+    }
     func verifyPreferences(_ copy: BackupManifest) async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do { try await preferences.verify(copy); message = "Preferences 配置副本校验通过。" } catch { fail(error) }
     }
     func diagnosticText(error: Error? = nil) -> String {
         let ns = error as NSError?
-        return ["WCMigrate \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "") / iOS \(UIDevice.current.systemVersion)",
+        return ["WCMigrate \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "") (build \(Bundle.main.infoDictionary?["CFBundleVersion"] ?? "")) / iOS \(UIDevice.current.systemVersion)",
             "App Group: \(group)", "容器访问: \(accessMessage)", "屏幕常亮: \(UIApplication.shared.isIdleTimerDisabled ? "开启" : "关闭")",
             "来源: \(source?.bundleIdentifier ?? "未选择")\n\(source?.root.path ?? "")",
             "目标: \(target?.bundleIdentifier ?? "未选择")\n\(target?.root.path ?? "")",
-            "模式: \(transferMode.title)", "映射: " + mappings.map { $0.source + " → " + $0.target }.joined(separator: "; "),
+            "模式: \(transferMode.title)", "来源文件: \(transferMode.sourceNote(keepSource: keepMigrationSource))", "映射: " + mappings.map { $0.source + " → " + $0.target }.joined(separator: "; "),
             "配置路径: \(configurationPath)\n配置保存位置: \(preferencesURL.path)",
             error.map { "错误: \($0.localizedDescription)\n\(ns?.domain ?? "") code=\(ns?.code ?? 0)\n\(ns?.userInfo ?? [:])" } ?? "",
             "运行记录:\n" + logs.prefix(60).joined(separator: "\n"),
