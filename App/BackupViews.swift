@@ -238,8 +238,8 @@ struct SettingsView: View {
             }
             CertificateReminderSection(reminder: store.certificateReminder)
             Section("环境诊断") {
-                SettingsValueRow(title: "支持系统", icon: "iphone", value: "iOS 26–27.2")
-                    .accessibilityLabel("支持系统：iOS 26–27.2").accessibilityIdentifier("supportedSystems")
+                SettingsValueRow(title: "支持系统", icon: "iphone", value: "iOS 26–27.3")
+                    .accessibilityLabel("支持系统：iOS 26–27.3（27.3适配，待真机验证）").accessibilityIdentifier("supportedSystems")
                 SettingsValueRow(title: "系统", icon: "gearshape", value: "iOS " + UIDevice.current.systemVersion)
                 SettingsValueRow(title: "App Group", icon: "square.stack.3d.up", value: store.group, detail: true)
                 SettingsValueRow(title: "容器状态", icon: "checkmark.shield", value: store.accessMessage, detail: true)

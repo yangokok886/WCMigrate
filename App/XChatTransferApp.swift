@@ -5,12 +5,26 @@ import UniformTypeIdentifiers
     @StateObject private var store = AppStore()
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene { WindowGroup {
-        RootView().environmentObject(store).tint(.xctAccent)
+        FirstLaunchGate().environmentObject(store).tint(.xctAccent)
             .onChange(of: scenePhase) { _, value in
                 if value == .background { store.cancel(reason: "应用进入后台") }
                 if value == .active { Task { await store.certificateReminder.refresh(); await store.recoverConfigurationRenames() } }
             }
     } }
+}
+/// Construct the main pages (and start the product tour) only after acceptance.
+private struct FirstLaunchGate: View {
+    @AppStorage("hasAcceptedDisclaimerV1") private var accepted = false
+
+    var body: some View {
+        // UI demo/test launches must reach the product-tour fixtures without
+        // mutating the user's real first-launch acceptance state.
+        if accepted || ProcessInfo.processInfo.arguments.contains("-ui-demo") {
+            RootView()
+        } else {
+            DisclaimerView { accepted = true }
+        }
+    }
 }
 struct RootView: View {
     @AppStorage("hasCompletedProductTourV2") private var completedTour = false

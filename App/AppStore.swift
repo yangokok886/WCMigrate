@@ -54,6 +54,11 @@ import SQLite3
         renameQueue = ConfigurationRenameQueue(file: support.appendingPathComponent("configuration-renames.json"), prepareAccess: { _ = XCTContainerBridge.prepareRead($0.path) })
         let legacyPreferencesURL = support.appendingPathComponent("PreferencesCopies")
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        // Keep a stable, visible Documents entry for the Files app even before
+        // the user performs the first backup or staging operation.
+        try? FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: documents.appendingPathComponent("插件配置备份"), withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: documents.appendingPathComponent("数据暂存"), withIntermediateDirectories: true)
         var storageError: Error?
         let initialPreferencesURL: URL
         do { initialPreferencesURL = try ConfigurationStorage.prepare(legacy: legacyPreferencesURL, destination: documents.appendingPathComponent("插件配置备份")) }

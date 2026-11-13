@@ -56,6 +56,18 @@ final class DataStagingTests: XCTestCase {
         XCTAssertEqual(records.first?.state, .returned)
         do { try await service.beginReturn(record.id, target: target); XCTFail("must not restore target leftovers as original chats") } catch {}
     }
+
+    func testCorruptStagingRecordDoesNotHideHealthyRecords() async throws {
+        let first = try app("Healthy")
+        let second = try app("Broken")
+        let healthy = try await service.create(source: first, selections: ["Documents"])
+        let broken = try await service.create(source: second, selections: ["Documents"])
+        let brokenMetadata = own.appendingPathComponent("Documents/数据暂存/.records/\(broken.id.uuidString).json")
+        try Data("{ definitely not json".utf8).write(to: brokenMetadata)
+
+        let listed = try await service.list()
+        XCTAssertEqual(listed.map(\.id), [healthy.id])
+    }
     func testInterruptedMoveResumesAfterRestart() async throws {
         let source = try app("Old")
         let record = try await service.create(source: source, selections: ["Documents", "Library"])

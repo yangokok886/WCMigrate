@@ -56,6 +56,41 @@ final class RecoveryTests: XCTestCase {
             do { _ = try await DirectMigrationService(store: location).resume(id, source: a, target: b, preferences: prefs, progress: { _ in }); XCTFail("changed data accepted") } catch {}
         }
     }
+
+    func testHistorySkipsTruncatedReceiptAndKeepsValidTask() async throws {
+        let store = root.appendingPathComponent("Tasks")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try Data("{ truncated".utf8).write(to: store.appendingPathComponent("broken.json"))
+        let receipt = MigrationReceipt(id: UUID(), created: Date(), sourceName: "a", targetName: "b",
+            sourceBundleID: "test.a", targetBundleID: "test.b", state: "cancelledPartial", files: 0,
+            bytes: 0, completedFiles: 0, completedBytes: 0, preferences: [], preferenceAbsences: [], mappings: [])
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(receipt).write(to: store.appendingPathComponent(receipt.id.uuidString + ".json"))
+
+        let history = try await DirectMigrationService(store: store).history()
+        XCTAssertEqual(history.map(\.id), [receipt.id])
+    }
+
+    func testDeepTreeStopsWithDiagnosticInsteadOfUnboundedRecursion() async throws {
+        let source = try app("deep-source"), target = try app("deep-target")
+        var current = source.root.appendingPathComponent("Documents")
+        // Keep each component short so the fixture reaches the migration depth
+        // guard before the host filesystem rejects the path itself.
+        for _ in 0..<129 {
+            current = current.appendingPathComponent("d")
+            try FileManager.default.createDirectory(at: current, withIntermediateDirectories: true)
+        }
+        try Data("x".utf8).write(to: current.appendingPathComponent("file"))
+        do {
+            _ = try await DirectMigrationService(store: root.appendingPathComponent("Tasks"))
+                .preview(source: source, target: target,
+                         mappings: [DirectoryMapping(source: "Documents", target: "Documents")],
+                         mode: .replace, detailed: true)
+            XCTFail("deep tree should be rejected before exhausting the call stack")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("128"))
+        }
+    }
     func testExchangeResumeNeverSwapsCompletedPairAgain() async throws {
         let a = try app("source"), b = try app("target")
         try put(a, "one", "source-one"); try put(a, "two", "source-two")

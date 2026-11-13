@@ -28,9 +28,11 @@ public struct StagedData: Codable, Identifiable, Sendable {
     public var directoryName: String? = nil
     /// When true, staging copies selected data and leaves the source untouched.
     public var keepSource: Bool = false
+    /// One optional identity label for WeChat data. Priority: account, then wxid.
+    public var accountIdentifier: String? = nil
     public var layoutUpgradePending: Bool? = nil
 
-    private enum CodingKeys: String, CodingKey { case id, created, application, selections, state, incomingTask, returnTask, returnTarget, bytes, files, directoryName, keepSource, layoutUpgradePending }
+    private enum CodingKeys: String, CodingKey { case id, created, application, selections, state, incomingTask, returnTask, returnTarget, bytes, files, directoryName, keepSource, accountIdentifier, layoutUpgradePending }
     public init(id: UUID, created: Date, application: AppInstance, selections: [String], state: State, incomingTask: UUID, returnTask: UUID? = nil, returnTarget: AppInstance? = nil, bytes: Int64 = 0, files: Int = 0, directoryName: String? = nil, keepSource: Bool = false) {
         self.id = id; self.created = created; self.application = application; self.selections = selections; self.state = state; self.incomingTask = incomingTask; self.returnTask = returnTask; self.returnTarget = returnTarget; self.bytes = bytes; self.files = files; self.directoryName = directoryName; self.keepSource = keepSource
     }
@@ -41,6 +43,7 @@ public struct StagedData: Codable, Identifiable, Sendable {
         returnTask = try c.decodeIfPresent(UUID.self, forKey: .returnTask); returnTarget = try c.decodeIfPresent(AppInstance.self, forKey: .returnTarget)
         bytes = try c.decodeIfPresent(Int64.self, forKey: .bytes) ?? 0; files = try c.decodeIfPresent(Int.self, forKey: .files) ?? 0
         directoryName = try c.decodeIfPresent(String.self, forKey: .directoryName); keepSource = try c.decodeIfPresent(Bool.self, forKey: .keepSource) ?? false
+        accountIdentifier = try c.decodeIfPresent(String.self, forKey: .accountIdentifier)
         layoutUpgradePending = try c.decodeIfPresent(Bool.self, forKey: .layoutUpgradePending)
     }
     public var mappings: [DirectoryMapping] { selections.map { DirectoryMapping(source: $0, target: $0) } }
@@ -163,7 +166,11 @@ public actor DataStagingService {
             }
         }
         for id in ids {
-            var item = try load(id)
+            // One damaged/half-written record must not hide every other
+            // staged item. Keep the record on disk so the user can inspect
+            // the diagnostics or retry cleanup, but continue listing healthy
+            // records.
+            guard var item = try? load(id) else { continue }
             // Recover a successful task even if killed before the metadata update.
             let task = item.state == .incoming ? item.incomingTask : (item.state == .returning ? item.returnTask : nil)
             if !running, let task, let receipt = history.first(where: { $0.id == task }), receipt.state == "filesVerified" {
@@ -172,6 +179,11 @@ public actor DataStagingService {
             }
             if !running, item.directoryName == nil, item.state == .stored || item.state == .returned {
                 item = try upgradeLayout(item)
+            }
+            if item.accountIdentifier == nil, item.state == .stored || item.state == .returning || item.state == .returned,
+               let identity = WeChatIdentityResolver.preferredIdentifier(in: try folder(item)) {
+                item.accountIdentifier = identity
+                try? save(item)
             }
             result.append(item)
         }

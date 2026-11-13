@@ -25,14 +25,17 @@ public actor BackupService {
     private struct BackupPlan: Codable { var task: PendingConfigurationBackup; var before: Inventory }
     public func pending() throws -> [PendingConfigurationBackup] {
         try fm.createDirectory(at: store, withIntermediateDirectories: true)
-        return try fm.contentsOfDirectory(at: store, includingPropertiesForKeys: nil).compactMap { dir in
-            guard dir.pathExtension == "partial", UUID(uuidString: dir.deletingPathExtension().lastPathComponent) != nil else { return nil }
+        var result: [PendingConfigurationBackup] = []
+        for dir in try fm.contentsOfDirectory(at: store, includingPropertiesForKeys: nil) {
+            guard dir.pathExtension == "partial",
+                  UUID(uuidString: dir.deletingPathExtension().lastPathComponent) != nil else { continue }
             let url = dir.appendingPathComponent("plan.json")
-            guard let data = try? Data(contentsOf: url) else { return nil } // Older versions had no resumable inventory.
-            let plan = try JSONDecoder().decode(BackupPlan.self, from: data)
-            guard dir.lastPathComponent == plan.task.id.uuidString + ".partial" else { throw TransferError.corruptBackup }
-            return plan.task
+            guard let data = try? Data(contentsOf: url),
+                  let plan = try? JSONDecoder().decode(BackupPlan.self, from: data),
+                  dir.lastPathComponent == plan.task.id.uuidString + ".partial" else { continue }
+            result.append(plan.task)
         }
+        return result.sorted { $0.id.uuidString < $1.id.uuidString }
     }
     public func resume(_ id: UUID, instance: AppInstance, progress: @escaping @Sendable (BackupProgress) -> Void) throws -> BackupManifest {
         let stage = try PathSafety.resolve(id.uuidString + ".partial", in: store)
@@ -252,12 +255,15 @@ public actor BackupService {
     public func list() throws -> [BackupManifest] {
         try fm.createDirectory(at: store, withIntermediateDirectories: true)
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-        return try fm.contentsOfDirectory(at: store, includingPropertiesForKeys: nil).compactMap { dir -> BackupManifest? in
-            guard UUID(uuidString: dir.lastPathComponent) != nil else { return nil }
-            let m = try decoder.decode(BackupManifest.self, from: Data(contentsOf: dir.appendingPathComponent("manifest.json")))
-            guard m.id.uuidString == dir.lastPathComponent else { throw TransferError.corruptBackup }
-            return m
-        }.sorted { $0.created > $1.created }
+        var result: [BackupManifest] = []
+        for dir in try fm.contentsOfDirectory(at: store, includingPropertiesForKeys: nil) {
+            guard UUID(uuidString: dir.lastPathComponent) != nil else { continue }
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
+                  let m = try? decoder.decode(BackupManifest.self, from: data),
+                  m.id.uuidString == dir.lastPathComponent else { continue }
+            result.append(m)
+        }
+        return result.sorted { $0.created > $1.created }
     }
     public func incompleteCount() throws -> Int {
         try fm.createDirectory(at: store, withIntermediateDirectories: true)

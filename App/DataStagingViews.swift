@@ -19,6 +19,9 @@ struct DataStagingView: View {
                     NavigationLink { StagedDataDetail(id: item.id) } label: {
                         VStack(alignment: .leading, spacing: 7) {
                             Text(item.application.displayName).font(.headline)
+                            if let identifier = item.accountIdentifier, !identifier.isEmpty {
+                                Text(identifier).font(.subheadline.monospaced()).foregroundStyle(Color.xctAccent)
+                            }
                             Text(item.state.title).font(.subheadline).foregroundStyle(item.state == .stored ? Color.xctAccent : Color.secondary)
                             Text(item.created, style: .date).font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5)
@@ -138,6 +141,9 @@ struct StagedDataDetail: View {
             if let record {
                 Section {
                     InfoRow(title: "原应用", value: record.application.displayName + " · " + record.application.bundleIdentifier)
+                    if let identifier = record.accountIdentifier, !identifier.isEmpty {
+                        InfoRow(title: "微信身份", value: identifier)
+                    }
                     InfoRow(title: "状态", value: record.state.title)
                     if let directoryName = record.directoryName { InfoRow(title: "暂存目录", value: directoryName) }
                     InfoRow(title: "原文件处理", value: record.keepSource ? "复制，保留原数据" : "移动，成功项目移出原应用")

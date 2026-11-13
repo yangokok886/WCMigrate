@@ -19,7 +19,6 @@ static void XCTNote(NSString *bid, NSString *step, NSString *value) {
         if (!XCTIconNotes[bid]) XCTIconNotes[bid] = [NSMutableDictionary new];
         XCTIconNotes[bid][step] = value ?: @"未知";
     }
-    wq_log(@"icon %@ · %@: %@", bid, step, value);
 }
 void XCTRecordIconSource(NSString *bundleID, NSString *message) { XCTNote(bundleID, @"显示来源", message); }
 NSDictionary *XCTIconDiagnostics(NSString *bid) {

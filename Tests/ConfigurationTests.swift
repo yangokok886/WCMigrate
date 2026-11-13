@@ -58,6 +58,25 @@ final class ConfigurationTests: XCTestCase {
         let m = try XCTUnwrap(saved); XCTAssertEqual(m.files.map(\.path), ["Custom/Options/.config"]); try await svc.verify(m)
         let listed = try await svc.list(); XCTAssertEqual(listed.count, 1)
     }
+
+    func testCorruptBackupRecordDoesNotHideValidBackupsOrPendingTasks() async throws {
+        let store = root.appendingPathComponent("copies")
+        let service = PreferencesService(store: store)
+        _ = try plist("source/Library/Preferences/plugin.plist")
+        let app = AppInstance(displayName: "source", bundleIdentifier: "test.source", root: root.appendingPathComponent("source"), origin: "test")
+        _ = try await service.save(instance: app, systemVersion: "test", deviceModel: "test", progress: { _ in })
+
+        let badManifest = store.appendingPathComponent("broken-manifest")
+        try FileManager.default.createDirectory(at: badManifest, withIntermediateDirectories: true)
+        try Data("{ broken".utf8).write(to: badManifest.appendingPathComponent("manifest.json"))
+        let badPartial = store.appendingPathComponent(UUID().uuidString + ".partial")
+        try FileManager.default.createDirectory(at: badPartial, withIntermediateDirectories: true)
+        try Data("{ broken".utf8).write(to: badPartial.appendingPathComponent("plan.json"))
+        let listed = try await service.list()
+        let pending = try await service.pendingBackups()
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertTrue(pending.isEmpty)
+    }
     func testUnrecognizedFolderAndLinksRejected() async throws {
         _ = try put("unknown/chat.db", Data("chat".utf8))
         do { _ = try await service().importConfiguration(at: root.appendingPathComponent("unknown"), systemVersion: "test", deviceModel: "test"); XCTFail() } catch { XCTAssertTrue(error.localizedDescription.contains("无法自动识别")) }

@@ -6,7 +6,7 @@ python3 - <<'PY'
 import pathlib,zipfile,hashlib,os
 root=pathlib.Path.cwd(); out=root/'build/WCMigrate-1.0.2-source.zip'
 # Publish only source, resources, build scripts and current documentation.
-roots=['App','Core','CSupport','ContainerAccess','Vendor','Resources','Scripts','Tests','UITests','XChatTransfer.xcodeproj']
+roots=['App','Core','CSupport','ContainerAccess','Vendor','Resources','Scripts','Tests','UITests','XChatTransfer.xcodeproj','Marketing']
 files=['.gitignore','LICENSE','README.md','CHANGELOG.md','Package.swift','project.yml']
 docs=['ARCHITECTURE.md','BUILD_VERIFICATION.md','TEST_MATRIX.md','THIRD_PARTY_NOTICES.md','UI_GUIDELINES.md','CONFIGURATION_RENAME_AND_CERTIFICATES.md','ONBOARDING_AND_DATA_STAGING.md']
 files += ['Docs/'+d for d in docs]

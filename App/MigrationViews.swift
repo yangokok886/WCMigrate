@@ -13,6 +13,7 @@ struct DirectoryBrowser: View {
     @State private var entries: [DirectoryEntry] = []
     @State private var loading = true
     @State private var failure: String?
+    @State private var accountIdentifiers: [String: String] = [:]
     var body: some View {
         List {
             Section {
@@ -32,7 +33,16 @@ struct DirectoryBrowser: View {
                         }
                         if entry.isDirectory {
                             NavigationLink { DirectoryBrowser(instance: instance, relative: entry.path, mode: mode, selectionOverride: selectionOverride) } label: {
-                                HStack { Image(systemName: "folder").foregroundStyle(Color.xctAccent); Text(entry.name).font(.subheadline); Spacer() }.frame(minHeight: 44).contentShape(Rectangle())
+                                HStack {
+                                    Image(systemName: "folder").foregroundStyle(Color.xctAccent)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(entry.name).font(.subheadline)
+                                        if let identifier = accountIdentifiers[entry.path] {
+                                            Text(identifier).font(.caption.monospaced()).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                }.frame(minHeight: 44).contentShape(Rectangle())
                             }.accessibilityIdentifier("openDirectory-" + entry.path)
                         } else if case .target(let select) = mode {
                             Button { select(entry.path) } label: {
@@ -65,7 +75,43 @@ struct DirectoryBrowser: View {
             if tour.active {
                 entries = [DirectoryEntry(path: "Documents", name: "Documents", isDirectory: true, bytes: 0), DirectoryEntry(path: "Library", name: "Library", isDirectory: true, bytes: 0)]; loading = false; return
             }
-            do { entries = try await store.entries(instance, relative: relative) } catch { failure = error.localizedDescription; store.audit("目录读取失败 · " + error.localizedDescription) }; loading = false }
+            do {
+                entries = try await store.entries(instance, relative: relative)
+                let outcome = await Self.identifiers(for: entries, instance: instance, relative: relative)
+                accountIdentifiers = outcome.values
+                for detail in outcome.diagnostics {
+                    store.audit("微信身份解析 · \(instance.bundleIdentifier) · \(detail)")
+                }
+            } catch {
+                failure = error.localizedDescription
+                store.audit("目录读取失败 · " + error.localizedDescription)
+            }
+            loading = false
+        }
+    }
+    private static func identifiers(for entries: [DirectoryEntry], instance: AppInstance, relative: String?) async -> (values: [String: String], diagnostics: [String]) {
+        guard relative == "Documents" || relative == nil else { return ([:], []) }
+        let candidates = entries.filter { $0.isDirectory && isMD5Directory($0.name) }
+        guard !candidates.isEmpty else { return ([:], []) }
+        return await Task.detached(priority: .utility) {
+            var result: [String: String] = [:]
+            var diagnostics: [String] = []
+            for entry in candidates {
+                let root = instance.root.appendingPathComponent(entry.path, isDirectory: true)
+                let outcome = WeChatIdentityResolver.diagnostic(in: root)
+                if let identifier = outcome.identifier, !identifier.isEmpty { result[entry.path] = identifier }
+                diagnostics.append("\(entry.name) · \(outcome.detail)")
+            }
+            return (result, diagnostics)
+        }.value
+    }
+    private static func isMD5Directory(_ name: String) -> Bool {
+        name.count == 32 && name != String(repeating: "0", count: 32) && name.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 97...102: return true
+            default: return false
+            }
+        }
     }
     private func toggle(_ path: String) {
         if let selectionOverride {
