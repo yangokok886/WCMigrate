@@ -77,8 +77,12 @@ public actor DirectMigrationService {
     // Keep the strict snapshot comparison; report precisely why resuming was refused.
     private func sameShape(_ lhs: Tree, _ rhs: Tree) -> Bool {
         guard lhs.items.count == rhs.items.count else { return false }
-        return zip(lhs.items, rhs.items).allSatisfy { a, b in
-            a.relative == b.relative && a.directory == b.directory && a.bytes == b.bytes
+        // Lightweight inventories intentionally keep native directory order. Compare
+        // by relative path so a scan does not need an O(n log n) sort just for a check.
+        let expected = Dictionary(uniqueKeysWithValues: lhs.items.map { ($0.relative, $0) })
+        return rhs.items.allSatisfy { item in
+            guard let old = expected[item.relative] else { return false }
+            return old.directory == item.directory && old.bytes == item.bytes
         }
     }
 
@@ -113,8 +117,13 @@ public actor DirectMigrationService {
     private struct MoveStep: Codable {
         var source: String
         var target: String
-        var originalSource: Tree
-        var originalTarget: Tree
+        // New plans reference the immutable mapping snapshots instead of embedding
+        // a full source/target subtree in every step. Optional fields keep old plans
+        // resumable while avoiding repeated multi-gigabyte tree copies.
+        var mappingIndex: Int? = nil
+        var relative: String? = nil
+        var originalSource: Tree? = nil
+        var originalTarget: Tree? = nil
     }
     private struct ResumePlan: Codable {
         var source: AppInstance
@@ -325,7 +334,10 @@ public actor DirectMigrationService {
             }
         }
         try walk(base, "")
-        items.sort { $0.relative < $1.relative }
+        // Detailed snapshots are journaled and used to generate deterministic move
+        // steps. Lightweight preflight snapshots are compared by path and do not need
+        // this expensive full sort.
+        if detailed { items.sort { $0.relative < $1.relative } }
         return Tree(items: items)
     }
     private func validate(source: AppInstance, target: AppInstance, mappings: [DirectoryMapping], allowMissingSource: Bool = false) throws {
@@ -450,6 +462,20 @@ public actor DirectMigrationService {
             modified: Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec) - 978_307_200 + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000),
             inode: UInt64(info.st_ino), device: Int32(info.st_dev))
     }
+    private func materializedTree(root: URL, relative: String, inventory: Tree) throws -> Tree {
+        var items: [Item] = []
+        items.reserveCapacity(inventory.items.count)
+        for item in inventory.items {
+            try Task.checkCancellation()
+            let suffix = item.relative.isEmpty ? "" : "/" + item.relative
+            let path = try child(root, relative + suffix)
+            var exact = try materialize(item, at: path)
+            exact.relative = item.relative
+            items.append(exact)
+        }
+        return Tree(items: items)
+    }
+
     private func checkItem(_ expected: Item?, at url: URL) throws {
         var info = stat()
         if lstat(url.path, &info) != 0 {
@@ -523,9 +549,22 @@ public actor DirectMigrationService {
     private func expectedResult(source: Tree, target: Tree, mode: TransferMode) -> [String: Item] {
         var result = Dictionary(uniqueKeysWithValues: source.items.map { ($0.relative, $0) })
         if mode == .merge {
-            let files = source.files.map(\.relative)
+            // Check whether a target entry is below a source file by walking its
+            // ancestors. This replaces the previous files.contains(where:) scan,
+            // which became O(sourceFiles * targetItems) for large chat directories.
+            let sourceFiles = Set(source.files.map(\.relative))
+            func isCoveredBySourceFile(_ path: String) -> Bool {
+                if sourceFiles.contains("") { return true }
+                var current = path
+                while !current.isEmpty {
+                    if sourceFiles.contains(current) { return true }
+                    guard let slash = current.lastIndex(of: "/") else { break }
+                    current = String(current[..<slash])
+                }
+                return false
+            }
             for old in target.items where result[old.relative] == nil {
-                if !files.contains(where: { $0.isEmpty || old.relative.hasPrefix($0 + "/") }) { result[old.relative] = old }
+                if !isCoveredBySourceFile(old.relative) { result[old.relative] = old }
             }
         }
         return result
@@ -542,36 +581,25 @@ public actor DirectMigrationService {
     private func executeMoves(plan: inout ResumePlan, receipt: inout MigrationReceipt,
                               diagnostic: @Sendable (String) -> Void,
                               progress: @Sendable (BackupProgress) -> Void) throws -> MigrationReceipt {
-        // The inventory is in preorder. Compute every directory's exclusive end
-        // once instead of walking all descendants again for every move step.
-        // Large chat folders can contain hundreds of thousands of entries; the
-        // old hasPrefix loop made plan construction quadratic and triggered the
-        // iOS CPU watchdog before any file was moved.
-        func subtreeEnds(_ tree: Tree) -> [Int] {
-            var ends = tree.items.indices.map { $0 + 1 }
-            var stack: [(index: Int, prefix: String)] = []
-            for index in tree.items.indices {
-                let relative = tree.items[index].relative
-                while let last = stack.last, !last.prefix.isEmpty && !relative.hasPrefix(last.prefix) {
-                    ends[last.index] = index
-                    stack.removeLast()
-                }
-                if tree.items[index].directory {
-                    stack.append((index, relative.isEmpty ? "" : relative + "/"))
-                }
-            }
-            while let last = stack.popLast() { ends[last.index] = tree.items.count }
-            return ends
-        }
-        func subtree(_ tree: Tree, _ positions: [String: Int], _ ends: [Int], _ relative: String) -> Tree {
-            guard let start = positions[relative] else { return Tree(items: []) }
+        func subtree(_ tree: Tree, _ relative: String) -> Tree {
             let prefix = relative.isEmpty ? "" : relative + "/"
-            let end = ends[start]
-            return Tree(items: tree.items[start..<end].map {
-                var item = $0
-                item.relative = item.relative == relative ? "" : String(item.relative.dropFirst(prefix.count))
-                return item
-            })
+            let items = tree.items.compactMap { item -> Item? in
+                guard item.relative == relative || (relative.isEmpty || item.relative.hasPrefix(prefix)) else { return nil }
+                var copy = item
+                copy.relative = item.relative == relative ? "" : String(item.relative.dropFirst(prefix.count))
+                return copy
+            }
+            return Tree(items: items)
+        }
+        func expectedTrees(for step: MoveStep) -> (Tree, Tree) {
+            if let originalSource = step.originalSource, let originalTarget = step.originalTarget {
+                return (originalSource, originalTarget)
+            }
+            guard let index = step.mappingIndex, let relative = step.relative,
+                  plan.sources.indices.contains(index), plan.targets.indices.contains(index) else {
+                return (Tree(items: []), Tree(items: []))
+            }
+            return (subtree(plan.sources[index], relative), subtree(plan.targets[index], relative))
         }
         if plan.moves == nil {
             var steps: [MoveStep] = []
@@ -580,20 +608,24 @@ public actor DirectMigrationService {
                 // an immutable move journal, materialize only the selected roots so
                 // resume can distinguish an already-moved tree from an untouched
                 // target with the same names and sizes.
-                let src = try tree(root: plan.source.root, relative: mapping.source, detailed: true)
-                let dst = try tree(root: plan.target.root, relative: mapping.target, detailed: true)
+                // Preflight already enumerated these paths. Upgrade the lightweight
+                // inventory with per-item lstat metadata instead of recursively
+                // enumerating and sorting both trees a second time.
+                let src = try materializedTree(root: plan.source.root, relative: mapping.source, inventory: plan.sources[i])
+                let dst = try materializedTree(root: plan.target.root, relative: mapping.target, inventory: plan.targets[i])
+                // Replace the lightweight preflight snapshots with one detailed
+                // snapshot per mapping. Steps only reference these snapshots; they
+                // no longer serialize a duplicated subtree for every moved item.
+                plan.sources[i] = src
+                plan.targets[i] = dst
                 let targetItems = Dictionary(uniqueKeysWithValues: dst.items.map { ($0.relative, $0) })
-                let sourcePositions = Dictionary(uniqueKeysWithValues: src.items.enumerated().map { ($0.element.relative, $0.offset) })
-                let targetPositions = Dictionary(uniqueKeysWithValues: dst.items.enumerated().map { ($0.element.relative, $0.offset) })
-                let sourceEnds = subtreeEnds(src)
-                let targetEnds = subtreeEnds(dst)
                 var covered: String?
                 for item in src.items {
                     if let prior = covered, prior.isEmpty || item.relative == prior || item.relative.hasPrefix(prior + "/") { continue }
                     if plan.summary.mode == .merge && item.directory && targetItems[item.relative]?.directory == true { continue }
                     let suffix = item.relative.isEmpty ? "" : "/" + item.relative
                     steps.append(MoveStep(source: mapping.source + suffix, target: mapping.target + suffix,
-                                          originalSource: subtree(src, sourcePositions, sourceEnds, item.relative), originalTarget: subtree(dst, targetPositions, targetEnds, item.relative)))
+                                          mappingIndex: i, relative: item.relative))
                     covered = item.relative
                 }
             }
@@ -633,8 +665,9 @@ public actor DirectMigrationService {
             let targetBase = try PathSafety.potential(step.target, in: plan.target.root)
             var a = try tree(root: plan.source.root, relative: step.source)
             var b = try tree(root: plan.target.root, relative: step.target)
-            if !matches(step.originalSource, b) {
-                guard matches(step.originalSource, a), matches(step.originalTarget, b) else {
+            let expected = expectedTrees(for: step)
+            if !matches(expected.0, b) {
+                guard matches(expected.0, a), matches(expected.1, b) else {
                     throw PathDiagnostic("续传核对移动", step.source + " → " + step.target, "当前文件身份与移动任务不一致，未继续覆盖。")
                 }
                 try createParents(of: targetBase, in: plan.target.root)
@@ -643,14 +676,14 @@ public actor DirectMigrationService {
                 diagnostic("直接移动已提交 · " + step.source + " → " + step.target)
                 a = try tree(root: plan.source.root, relative: step.source)
                 b = try tree(root: plan.target.root, relative: step.target)
-                guard matches(step.originalSource, b) else { throw MigrationFailure.changed }
+                guard matches(expected.0, b) else { throw MigrationFailure.changed }
             }
             // After a swap, only the original destination remains at the old source.
             // A crash during cleanup is recoverable from this same immutable step.
-            guard matches(step.originalTarget, a, partial: true) else { throw MigrationFailure.changed }
-            if !a.items.isEmpty { try removeKnown(step.originalTarget, root: plan.source.root, relative: step.source) }
-            receipt.completedFiles += step.originalSource.files.count
-            receipt.completedBytes += step.originalSource.files.reduce(0) { $0 + $1.bytes }
+            guard matches(expected.1, a, partial: true) else { throw MigrationFailure.changed }
+            if !a.items.isEmpty { try removeKnown(expected.1, root: plan.source.root, relative: step.source) }
+            receipt.completedFiles += expected.0.files.count
+            receipt.completedBytes += expected.0.files.reduce(0) { $0 + $1.bytes }
             progress(BackupProgress("直接移动文件", receipt.completedFiles, receipt.files, receipt.completedBytes,
                                     fraction: receipt.files == 0 ? 0 : Double(receipt.completedFiles) / Double(receipt.files)))
             if Date().timeIntervalSince(lastSave) >= 1 { try persist(receipt); lastSave = Date() }
