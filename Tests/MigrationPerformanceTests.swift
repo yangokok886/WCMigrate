@@ -59,3 +59,30 @@ final class MigrationPerformanceTests: XCTestCase {
         XCTAssertNil(old.inventoryComplete); XCTAssertEqual(old.files, 2_000)
     }
 }
+
+extension MigrationPerformanceTests {
+    func testLargeReplaceMoveUsesRootRenameAndPreservesAllEntries() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        let sourceDir = a.appendingPathComponent("Documents"), targetDir = b.appendingPathComponent("Documents")
+        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+        for index in 0..<10_000 {
+            try Data([UInt8(index & 0xff)]).write(to: sourceDir.appendingPathComponent("item-\(index).bin"))
+        }
+        try Data("old".utf8).write(to: targetDir.appendingPathComponent("old.bin"))
+        let source = AppInstance(displayName: "a", bundleIdentifier: "test.a", root: a, origin: "fixture")
+        let target = AppInstance(displayName: "b", bundleIdentifier: "test.b", root: b, origin: "fixture")
+        let service = DirectMigrationService(store: root.appendingPathComponent("tasks"))
+        let receipt = try await service.migrate(source: source, target: target,
+            mappings: [DirectoryMapping(source: "Documents", target: "Documents")], mode: .replace,
+            keepSource: false, preferences: PreferencesService(store: root.appendingPathComponent("configs")),
+            systemVersion: "test", deviceModel: "test", allowOverwrite: true, progress: { _ in })
+        XCTAssertEqual(receipt.state, "filesVerified")
+        XCTAssertFalse(fm.fileExists(atPath: sourceDir.path))
+        XCTAssertFalse(fm.fileExists(atPath: targetDir.appendingPathComponent("old.bin").path))
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: targetDir.path).count, 10_000)
+    }
+}

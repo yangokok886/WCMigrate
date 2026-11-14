@@ -72,6 +72,12 @@ public actor DirectMigrationService {
     }
     private struct Tree: Codable {
         var items: [Item]
+        // Avoid allocating a second array every time a large tree only needs a
+        // count or byte total. Chat histories can contain hundreds of thousands
+        // of entries, so repeated `files` filtering is a measurable CPU spike.
+        var fileCount: Int { items.reduce(into: 0) { if !$1.directory { $0 += 1 } } }
+        var fileBytes: Int64 { items.reduce(into: Int64(0)) { if !$1.directory { $0 += $1.bytes } } }
+        var largestFile: Int64 { items.reduce(0) { max($0, $1.directory ? 0 : $1.bytes) } }
         var files: [Item] { items.filter { !$0.directory } }
     }
     // Keep the strict snapshot comparison; report precisely why resuming was refused.
@@ -311,7 +317,9 @@ public actor DirectMigrationService {
                     let code = errno; close(fd); throw PathDiagnostic.system("枚举扫描目录", url.path, code: code)
                 }
                 defer { closedir(stream) }
-                var names: [String] = []
+                // Consume entries directly from the directory stream. Keeping a
+                // second [String] for every directory made a 20-50万 item chat tree
+                // peak memory before the actual migration even started.
                 while true {
                     try Task.checkCancellation()
                     errno = 0
@@ -322,12 +330,7 @@ public actor DirectMigrationService {
                     let childName = withUnsafePointer(to: &record.pointee.d_name) {
                         $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
                     }
-                    if childName != "." && childName != ".." { names.append(childName) }
-                }
-                // Directory enumeration order is not stable. Traverse in native
-                // order to avoid sorting every large directory; the final tree is
-                // sorted once below before it is compared or journaled.
-                for childName in names {
+                    guard childName != ".", childName != ".." else { continue }
                     try walk(url.appendingPathComponent(childName), inside.isEmpty ? childName : inside + "/" + childName,
                              parent: fd, name: childName)
                 }
@@ -373,7 +376,7 @@ public actor DirectMigrationService {
             let t = try scan(target, m.target)
             guard !s.items.isEmpty else { throw TransferError.invalidPath }
             let old = Dictionary(uniqueKeysWithValues: t.items.map { ($0.relative, $0) })
-            for item in s.files {
+            for item in s.items where !item.directory {
                 total += item.bytes; largest = max(largest, item.bytes)
                 added += max(0, item.bytes - (old[item.relative]?.bytes ?? 0))
             }
@@ -385,17 +388,17 @@ public actor DirectMigrationService {
                 var sourceInfo = stat()
                 let sourcePath = source.root.appendingPathComponent(m.source).path
                 guard lstat(sourcePath, &sourceInfo) == 0, Int32(info.st_dev) == Int32(sourceInfo.st_dev) else { throw MigrationFailure.exchangeUnsupported }
-                if mode == .exchange { total += t.files.reduce(Int64(0)) { $0 + $1.bytes } }
+                if mode == .exchange { total += t.fileBytes }
             }
             sources.append(s); targets.append(t)
         }
         let available = try fm.attributesOfFileSystem(forPath: target.root.path)[.systemFreeSize] as? NSNumber
         let required = (mode == .exchange || !keepSource) ? 32 * 1_048_576 : added + largest + 32 * 1_048_576
         guard let available, available.int64Value > required else { throw MigrationFailure.insufficientSpace }
-        let fileCount = sources.reduce(0) { $0 + $1.files.count } + (mode == .exchange ? targets.reduce(0) { $0 + $1.files.count } : 0)
+        let fileCount = sources.reduce(0) { $0 + $1.fileCount } + (mode == .exchange ? targets.reduce(0) { $0 + $1.fileCount } : 0)
         return (MigrationSummary(id: taskID ?? UUID(), sourceName: source.displayName, targetName: target.displayName,
             sourceBundleID: source.bundleIdentifier, targetBundleID: target.bundleIdentifier,
-            files: fileCount, bytes: total, largestFile: largest, targetFiles: targets.reduce(0) { $0 + $1.files.count },
+            files: fileCount, bytes: total, largestFile: largest, targetFiles: targets.reduce(0) { $0 + $1.fileCount },
             mappings: mappings, targetPreferencesExist: false, mode: mode, keepSource: keepSource), sources, targets)
     }
     public func preview(source: AppInstance, target: AppInstance, mappings: [DirectoryMapping], mode: TransferMode = .replace, keepSource: Bool = true, detailed: Bool = true) throws -> MigrationSummary {
@@ -603,6 +606,20 @@ public actor DirectMigrationService {
         }
         if plan.moves == nil {
             var steps: [MoveStep] = []
+            // A replace migration with source retention disabled can move each
+            // selected root atomically. Do not expand a huge chat tree into one
+            // journal step per child; the filesystem rename already covers the
+            // complete subtree and is recoverable as one operation.
+            let useAtomicReplace = plan.summary.mode == .replace && plan.sources.count == plan.summary.mappings.count
+                && plan.sources.allSatisfy { $0.items.count >= 10_000 }
+            if useAtomicReplace {
+                for (i, mapping) in plan.summary.mappings.enumerated() {
+                    steps.append(MoveStep(source: mapping.source, target: mapping.target,
+                                          mappingIndex: i, relative: ""))
+                }
+                plan.moves = steps
+                try persistPlan(plan)
+            } else {
             for (i, mapping) in plan.summary.mappings.enumerated() {
                 // The first preflight is intentionally lightweight. Before creating
                 // an immutable move journal, materialize only the selected roots so
@@ -631,6 +648,7 @@ public actor DirectMigrationService {
             }
             plan.moves = steps
             try persistPlan(plan)
+            }
         }
         func matches(_ expected: Tree, _ actual: Tree, partial: Bool = false) -> Bool {
             let originals = Dictionary(uniqueKeysWithValues: expected.items.map { ($0.relative, $0) })
@@ -658,6 +676,85 @@ public actor DirectMigrationService {
         }
         receipt.completedFiles = 0; receipt.completedBytes = 0
         receipt.state = "moving"; try persist(receipt)
+
+        // Replace + move is the common large-chat path. One atomic directory
+        // rename avoids building and comparing the same 20-50万 item tree three
+        // more times. Root inode checks still protect against moving a changed
+        // selection, while deletion is delegated to FileManager so Swift never
+        // retains a second recursive inventory of the old target.
+        let useAtomicReplace = plan.summary.mode == .replace && plan.sources.count == plan.summary.mappings.count
+            && plan.sources.allSatisfy { $0.items.count >= 10_000 }
+        if useAtomicReplace {
+            func identity(_ url: URL) -> (UInt64, Int32, Bool)? {
+                var info = stat()
+                guard lstat(url.path, &info) == 0 else { return nil }
+                return (UInt64(info.st_ino), Int32(info.st_dev), XCTModeIsDirectory(UInt32(info.st_mode)) != 0)
+            }
+            func rootItem(_ tree: Tree) -> Item? { tree.items.first(where: { $0.relative.isEmpty }) }
+            func matchesRoot(_ item: Item?, _ value: (UInt64, Int32, Bool)?) -> Bool {
+                guard let item, let value else { return false }
+                return item.directory == value.2 && item.inode != 0 && item.inode == value.0 && item.device == value.1
+            }
+            for (index, step) in (plan.moves ?? []).enumerated() {
+                try Task.checkCancellation()
+                guard let mappingIndex = step.mappingIndex,
+                      plan.sources.indices.contains(mappingIndex), plan.targets.indices.contains(mappingIndex) else {
+                    throw MigrationFailure.changed
+                }
+                let sourceBase = try PathSafety.potential(step.source, in: plan.source.root)
+                let targetBase = try PathSafety.potential(step.target, in: plan.target.root)
+                var expectedSource = rootItem(plan.sources[mappingIndex])
+                var expectedTarget = rootItem(plan.targets[mappingIndex])
+                // Lightweight preflight intentionally omits inode data. Resolve
+                // only the two selected roots here; never materialize all children.
+                if expectedSource?.inode == 0, let item = expectedSource {
+                    var exact = try materialize(item, at: sourceBase); exact.relative = ""
+                    if let rootIndex = plan.sources[mappingIndex].items.firstIndex(where: { $0.relative.isEmpty }) {
+                        plan.sources[mappingIndex].items[rootIndex] = exact
+                    }
+                    expectedSource = exact
+                }
+                if expectedTarget?.inode == 0, let item = expectedTarget, identity(targetBase) != nil {
+                    var exact = try materialize(item, at: targetBase); exact.relative = ""
+                    if let rootIndex = plan.targets[mappingIndex].items.firstIndex(where: { $0.relative.isEmpty }) {
+                        plan.targets[mappingIndex].items[rootIndex] = exact
+                    }
+                    expectedTarget = exact
+                }
+                let currentSource = identity(sourceBase)
+                let currentTarget = identity(targetBase)
+
+                // If the process was killed after the atomic swap, the source
+                // inode is now at the target. Finish cleanup instead of swapping
+                // it back or rescanning the entire subtree.
+                if matchesRoot(expectedSource, currentTarget), !matchesRoot(expectedSource, currentSource) {
+                    if currentSource != nil { try fm.removeItem(at: sourceBase) }
+                    plan.completed[mappingIndex] = [plan.sources[mappingIndex], plan.targets[mappingIndex]]
+                    receipt.completedFiles += plan.sources[mappingIndex].fileCount
+                    receipt.completedBytes += plan.sources[mappingIndex].fileBytes
+                    try persistPlan(plan); try persist(receipt)
+                    continue
+                }
+                guard matchesRoot(expectedSource, currentSource) else {
+                    throw PathDiagnostic("执行移动", sourceBase.path, "源目录在执行前已变化，未继续写入。")
+                }
+                try createParents(of: targetBase, in: plan.target.root)
+                let hadTarget = currentTarget != nil
+                let result = hadTarget ? XCTSwapPaths(sourceBase.path, targetBase.path) : XCTMoveExclusive(sourceBase.path, targetBase.path)
+                guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                if hadTarget { try fm.removeItem(at: sourceBase) }
+                plan.completed[mappingIndex] = [plan.sources[mappingIndex], plan.targets[mappingIndex]]
+                receipt.completedFiles += plan.sources[mappingIndex].fileCount
+                receipt.completedBytes += plan.sources[mappingIndex].fileBytes
+                progress(BackupProgress("直接移动文件", receipt.completedFiles, receipt.files, receipt.completedBytes,
+                                        fraction: receipt.files == 0 ? 0 : Double(receipt.completedFiles) / Double(receipt.files)))
+                try persistPlan(plan); try persist(receipt)
+                _ = index
+            }
+            receipt.state = "filesVerified"; try persist(receipt)
+            progress(BackupProgress("移动完成", receipt.files, receipt.files, receipt.bytes, fraction: 1))
+            return receipt
+        }
         var lastSave = Date()
         for step in plan.moves ?? [] {
             try Task.checkCancellation()
@@ -682,8 +779,8 @@ public actor DirectMigrationService {
             // A crash during cleanup is recoverable from this same immutable step.
             guard matches(expected.1, a, partial: true) else { throw MigrationFailure.changed }
             if !a.items.isEmpty { try removeKnown(expected.1, root: plan.source.root, relative: step.source) }
-            receipt.completedFiles += expected.0.files.count
-            receipt.completedBytes += expected.0.files.reduce(0) { $0 + $1.bytes }
+            receipt.completedFiles += expected.0.fileCount
+            receipt.completedBytes += expected.0.fileBytes
             progress(BackupProgress("直接移动文件", receipt.completedFiles, receipt.files, receipt.completedBytes,
                                     fraction: receipt.files == 0 ? 0 : Double(receipt.completedFiles) / Double(receipt.files)))
             if Date().timeIntervalSince(lastSave) >= 1 { try persist(receipt); lastSave = Date() }
@@ -692,7 +789,7 @@ public actor DirectMigrationService {
         // touching any newly created file. Directory timestamps naturally changed.
         for (i, mapping) in plan.summary.mappings.enumerated() {
             let remaining = try tree(root: plan.source.root, relative: mapping.source)
-            guard matches(plan.sources[i], remaining, partial: true), remaining.files.isEmpty else { throw MigrationFailure.changed }
+            guard matches(plan.sources[i], remaining, partial: true), remaining.fileCount == 0 else { throw MigrationFailure.changed }
             if !remaining.items.isEmpty { try removeKnown(plan.sources[i], root: plan.source.root, relative: mapping.source) }
             let target = try tree(root: plan.target.root, relative: mapping.target)
             try verifyShape(target, expected: expectedResult(source: plan.sources[i], target: plan.targets[i], mode: plan.summary.mode))
@@ -805,11 +902,11 @@ public actor DirectMigrationService {
                     currentSources.append(try monitoredTree(root: source.root, relative: mapping.source))
                     currentTargets.append(try monitoredTree(root: target.root, relative: mapping.target))
                 }
-                let files = currentSources.flatMap(\.files)
                 summary = MigrationSummary(id: summary.id, sourceName: summary.sourceName, targetName: summary.targetName,
                     sourceBundleID: summary.sourceBundleID, targetBundleID: summary.targetBundleID,
-                    files: files.count, bytes: files.reduce(0) { $0 + $1.bytes }, largestFile: files.map(\.bytes).max() ?? 0,
-                    targetFiles: currentTargets.reduce(0) { $0 + $1.files.count }, mappings: mappings,
+                    files: currentSources.reduce(0) { $0 + $1.fileCount }, bytes: currentSources.reduce(0) { $0 + $1.fileBytes },
+                    largestFile: currentSources.reduce(0) { max($0, $1.largestFile) },
+                    targetFiles: currentTargets.reduce(0) { $0 + $1.fileCount }, mappings: mappings,
                     targetPreferencesExist: summary.targetPreferencesExist, mode: mode, inventoryComplete: true)
                 sources = currentSources; targets = currentTargets
                 plan.sources = sources; plan.targets = targets; plan.summary = summary; plan.completed = [:]
@@ -840,8 +937,8 @@ public actor DirectMigrationService {
             receipt.pendingExchange = nil
             receipt.completedFiles = 0; receipt.completedBytes = 0
             for i in plan.completed.keys {
-                receipt.completedFiles += sources[i].files.count + (mode == .exchange ? plan.targets[i].files.count : 0)
-                receipt.completedBytes += sources[i].files.reduce(0) { $0 + $1.bytes } + (mode == .exchange ? plan.targets[i].files.reduce(0) { $0 + $1.bytes } : 0)
+                receipt.completedFiles += sources[i].fileCount + (mode == .exchange ? plan.targets[i].fileCount : 0)
+                receipt.completedBytes += sources[i].fileBytes + (mode == .exchange ? plan.targets[i].fileBytes : 0)
             }
             try persistPlan(plan); try persist(receipt)
         } else {
@@ -913,8 +1010,8 @@ public actor DirectMigrationService {
                     let afterTarget = try monitoredTree(root: target.root, relative: mapping.target)
                     guard sameShape(afterTarget, sources[index]),
                           sameShape(afterSource, targets[index]) else { throw MigrationFailure.changed }
-                    receipt.completedFiles += sources[index].files.count + targets[index].files.count
-                    receipt.completedBytes += sources[index].files.reduce(0) { $0 + $1.bytes } + targets[index].files.reduce(0) { $0 + $1.bytes }
+                    receipt.completedFiles += sources[index].fileCount + targets[index].fileCount
+                    receipt.completedBytes += sources[index].fileBytes + targets[index].fileBytes
                     plan.completed[index] = [afterSource, afterTarget]
                     finishPhase()
                     try persistPlan(plan)
