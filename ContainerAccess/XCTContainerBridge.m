@@ -125,7 +125,7 @@ static BOOL XCTConfirmScan(NSString *what, int64_t ids, double seconds) { return
             NSString *identifier = wq_container_label(path);
             if (!identifier.length || !wq_grant(path)) continue;
             NSString *name = wq_display_name(identifier) ?: identifier;
-            NSMutableDictionary *item = [@{@"id":identifier,@"name":name,@"path":path} mutableCopy];
+            NSMutableDictionary *item = [@{@"id":identifier,@"name":name,@"path":path,@"verifiedContainerIdentifier":identifier} mutableCopy];
             [item addEntriesFromDictionary:XCTApplicationListingFacts(identifier)];
             NSString *bundle = item[@"bundlePath"];
             if (bundle) {
@@ -141,6 +141,9 @@ static BOOL XCTConfirmScan(NSString *what, int64_t ids, double seconds) { return
             }
             [result addObject:item];
         }
+        NSUInteger missingBundle = 0;
+        for (NSDictionary *item in result) if (![item[@"bundlePath"] length]) missingBundle++;
+        wq_log(@"应用发现汇总: 候选路径=%lu，身份与授权已确认=%lu，未取得安装路径=%lu（交由应用数据容器分类处理）", (unsigned long)paths.count, (unsigned long)result.count, (unsigned long)missingBundle);
         if (!result.count && error) *error = [NSError errorWithDomain:@"XChatTransfer" code:4 userInfo:@{NSLocalizedDescriptionKey:@"容器存在，但身份或读取能力未确认，不能展示为可用应用。"}];
         return result;
     }

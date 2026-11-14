@@ -27,9 +27,10 @@ public struct AppInstance: Identifiable, Codable, Hashable, Sendable {
     public var bookmark: Data?
     public var executableName: String?
     public var bundlePath: String?
-    public init(id: String = UUID().uuidString, displayName: String, bundleIdentifier: String, version: String? = nil, build: String? = nil, root: URL, origin: String, bookmark: Data? = nil, executableName: String? = nil, bundlePath: String? = nil) {
+    public var verifiedContainerIdentifier: String?
+    public init(id: String = UUID().uuidString, displayName: String, bundleIdentifier: String, version: String? = nil, build: String? = nil, root: URL, origin: String, bookmark: Data? = nil, executableName: String? = nil, bundlePath: String? = nil, verifiedContainerIdentifier: String? = nil) {
         self.id = id; self.displayName = displayName; self.bundleIdentifier = bundleIdentifier
-        self.version = version; self.build = build; self.root = root; self.origin = origin; self.bookmark = bookmark; self.executableName = executableName; self.bundlePath = bundlePath
+        self.version = version; self.build = build; self.root = root; self.origin = origin; self.bookmark = bookmark; self.executableName = executableName; self.bundlePath = bundlePath; self.verifiedContainerIdentifier = verifiedContainerIdentifier
     }
 }
 public extension AppInstance {

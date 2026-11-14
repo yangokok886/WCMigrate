@@ -6,10 +6,11 @@ WCMigrate使用GPL-3.0-or-later，完整许可见根目录LICENSE和Vendor/WQFil
 
 感谢 **kolbicz**，仓库：https://github.com/kolbicz/WQFiles 。固定提交 `86bc395a4d04408ef91ded2938fbee3c8cd07eb8`，GPL-3.0-or-later。
 
-Vendor/WQFiles保留与该提交逐字一致的原始文件及LICENSE：
+除下述单独更新的 LaunchServices 文件外，Vendor/WQFiles 保留该提交的原始文件及 LICENSE：
 
 - WQAccess.h/.m、WQAccessSafety.h：沙盒授权、容器访问、描述符IO与安全操作。
-- WQLaunchServices.h/.m：应用与容器元数据枚举。
+- WQLaunchServices.h/.m：应用与容器元数据枚举，更新至上游提交 `0d9c28c7e283e729b7cef4e18adcce145920dbdb`（头文件与原版相同）。采用上游未知布局路径发现、稳定数据库读取和解析工作量限制；未采用推断的容器身份。本地集成调整：名称返回不使用新版 WQVerbatim 标记（本项目未使用上游运行时 UI 自动翻译），沿用现有 WQLocalized 接口。
+- Tests/LaunchServicesTests.m：来自上述新提交的 `tests/WQLaunchServicesTests.m`，保留上游测试并增加部分固定布局匹配失败的本地回归用例，通过本项目 Scripts/test-launchservices.sh 启用 WQ_LS_TESTING 执行全部测试分支。
 - WQCore.h/.m：底层辅助。
 - WQLocalization.h/.m：上游本地化。
 - WQArchive.h/.m：ZIP读写。

@@ -4,6 +4,7 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 "$ROOT/Scripts/prepare-sdk26.sh"
 "$ROOT/Scripts/test.sh" > "$ROOT/build/sdk26-tests.log" 2>&1
+"$ROOT/Scripts/test-launchservices.sh" > "$ROOT/build/sdk26-launchservices-tests.log" 2>&1
 "$ROOT/Scripts/test-archive.sh" > "$ROOT/build/sdk26-archive-tests.log" 2>&1
 command -v xcodegen >/dev/null && xcodegen generate
 HOST="$ROOT/build/XcodeHost.app/Contents/Developer"

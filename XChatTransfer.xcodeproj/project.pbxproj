@@ -21,7 +21,6 @@
 		5B7DC0B815498CEDDEC717A4 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 991224CF8C17324F8F37FFE2 /* DesignSystem.swift */; };
 		60882CE5E43248BB94180AC9 /* MigrationViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = C868E42E3AEAEB53881EC8E2 /* MigrationViews.swift */; };
 		62069205602DB5F108AEDD93 /* DataStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2CF4964A1563BCA479B2680 /* DataStaging.swift */; };
-		62A9E5F7C1D84B9E9D7D4C21 /* WeChatIdentityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62A9E5F6C1D84B9E9D7D4C21 /* WeChatIdentityResolver.swift */; };
 		664C7B3A67404F459BD98C25 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = CCB38DFC8ADDF618D68C7DA4 /* libsqlite3.tbd */; };
 		6777DB495C498BC44E7F2D9C /* BackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DB5A39CCB10306115D35FD5 /* BackupService.swift */; };
 		6F64F0DFE8A209FAAB6A1E36 /* OperationEstimate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1365CC1CAD342F2A66FE3370 /* OperationEstimate.swift */; };
@@ -37,6 +36,7 @@
 		A071DC583BB8C9AD50C43085 /* XChatTransferApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FCA17BB2B14A9783C128613 /* XChatTransferApp.swift */; };
 		A985C0F2FAA1E984E35AB42B /* CertificateReminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBA4AD3E666043D6C3A4F942 /* CertificateReminder.swift */; };
 		BF0E05D75ACA5783B60A2C36 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D428DE1AA196761D1644DF0 /* Security.framework */; };
+		C205EB490A06C0594A858694 /* WeChatIdentityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50F4FC52DF5B543317A21C8 /* WeChatIdentityResolver.swift */; };
 		C7F43C4C0768CCFAAA0D0434 /* DiagnosticCopyButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 554BD77293E5C5E926D1D1EC /* DiagnosticCopyButton.swift */; };
 		CA228E17ABECE4D9B70CF84E /* ApplicationListingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C17A1788EBA0E2C529A5C2 /* ApplicationListingPolicy.swift */; };
 		CB7A0D7DB8D3DBE9021B5AED /* NativeTabBarGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BB1DFC26773560D4ADA4ECD /* NativeTabBarGeometry.swift */; };
@@ -106,8 +106,8 @@
 		A9C5FE72B584FF403B17AC2A /* DurableJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableJournal.swift; sourceTree = "<group>"; };
 		AA2E592E726D8DFFCAD3974C /* DataStagingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataStagingViews.swift; sourceTree = "<group>"; };
 		B2CF4964A1563BCA479B2680 /* DataStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataStaging.swift; sourceTree = "<group>"; };
-		62A9E5F6C1D84B9E9D7D4C21 /* WeChatIdentityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeChatIdentityResolver.swift; sourceTree = "<group>"; };
 		B30EA12BFDF0B89E310EDBC4 /* PreferencesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesService.swift; sourceTree = "<group>"; };
+		B50F4FC52DF5B543317A21C8 /* WeChatIdentityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeChatIdentityResolver.swift; sourceTree = "<group>"; };
 		B9C17A1788EBA0E2C529A5C2 /* ApplicationListingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationListingPolicy.swift; sourceTree = "<group>"; };
 		C2E013F1F0E237A27435975F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C77F0A604FE80202174E172F /* BridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BridgingHeader.h; sourceTree = "<group>"; };
@@ -251,7 +251,6 @@
 				5399F43A2D36703616FA6912 /* ConfigurationStorage.swift */,
 				F592B600B5A96D9B3E18727B /* DatabaseInspector.swift */,
 				B2CF4964A1563BCA479B2680 /* DataStaging.swift */,
-				62A9E5F6C1D84B9E9D7D4C21 /* WeChatIdentityResolver.swift */,
 				A1643DA715AC01764BDFA908 /* DiagnosticPages.swift */,
 				706C1E0402C87641B3A31AAD /* DirectMigrationService.swift */,
 				A9C5FE72B584FF403B17AC2A /* DurableJournal.swift */,
@@ -261,6 +260,7 @@
 				B30EA12BFDF0B89E310EDBC4 /* PreferencesService.swift */,
 				CE73FBDFAB0F892E67A5A14C /* ProvisioningProfile.swift */,
 				10E5F1E3C086EAE83B72CC4F /* StoreIconLookup.swift */,
+				B50F4FC52DF5B543317A21C8 /* WeChatIdentityResolver.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -393,7 +393,6 @@
 				16B5D998F2476935B4ABC433 /* ConfigurationRenaming.swift in Sources */,
 				CC08C540A5A62395D763EE16 /* ConfigurationStorage.swift in Sources */,
 				62069205602DB5F108AEDD93 /* DataStaging.swift in Sources */,
-				62A9E5F7C1D84B9E9D7D4C21 /* WeChatIdentityResolver.swift in Sources */,
 				9EB620DCFD1BF4B77FAE5115 /* DataStagingViews.swift in Sources */,
 				F486AE25BD68F61E06E2FF0B /* DatabaseInspector.swift in Sources */,
 				5B7DC0B815498CEDDEC717A4 /* DesignSystem.swift in Sources */,
@@ -418,6 +417,7 @@
 				DA3F4B1D597C37E294A4D205 /* WQCore.m in Sources */,
 				D891BF6A08D7BB6C18C222FE /* WQLaunchServices.m in Sources */,
 				7FBBFFE472D7AC69330F81F5 /* WQLocalization.m in Sources */,
+				C205EB490A06C0594A858694 /* WeChatIdentityResolver.swift in Sources */,
 				E4EBC3E1797E6C31640045CB /* XCTAppMetadata.m in Sources */,
 				2896E61C807766B913D91541 /* XCTContainerBridge.m in Sources */,
 				17A079925F05FABD6DE1DE52 /* XCTSystem.c in Sources */,
@@ -519,7 +519,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/WQFiles $(SRCROOT)/ContainerAccess $(SRCROOT)/CSupport/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0.2;
+				MARKETING_VERSION = 1.0.3;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -618,7 +618,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/WQFiles $(SRCROOT)/ContainerAccess $(SRCROOT)/CSupport/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0.2;
+				MARKETING_VERSION = 1.0.3;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = local.xchat.transfer;

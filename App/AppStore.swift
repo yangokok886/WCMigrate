@@ -26,7 +26,15 @@ import SQLite3
     @Published var mappings: [DirectoryMapping] = []
     @Published var keepMigrationSource = false { didSet { preview = nil } }
     @Published var transferMode: TransferMode = .replace { didSet { preview = nil } }
-    @Published var busy = false { didSet { UIApplication.shared.isIdleTimerDisabled = busy } }
+    @Published var busy = false {
+        didSet {
+            UIApplication.shared.isIdleTimerDisabled = busy
+            // Icon fallback can perform network requests and decode artwork.
+            // Suspend it for the lifetime of any file operation so migration
+            // gets the device's CPU and memory budget.
+            ApplicationIconCache.shared.setRemoteLookupsSuppressed(busy)
+        }
+    }
     @Published var configurationImportStatus = ""
     @Published var scanning = false
     @Published var estimate = OperationEstimate()
@@ -70,7 +78,7 @@ import SQLite3
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         try? (support as NSURL).setResourceValue(true, forKey: .isExcludedFromBackupKey)
         var needsApplicationRefresh = false
-        if let data = try? Data(contentsOf: support.appendingPathComponent("instances.json")), let saved = try? JSONDecoder().decode([AppInstance].self, from: data) { needsApplicationRefresh = saved.contains { $0.origin.hasPrefix("系统容器") && !$0.origin.contains("应用分类v1") }; instances = saved.filter { !$0.origin.hasPrefix("系统容器") || ($0.origin.contains("应用分类v1") && ApplicationListingPolicy.rejection(bundlePath: $0.bundlePath) == nil) } }
+        if let data = try? Data(contentsOf: support.appendingPathComponent("instances.json")), let saved = try? JSONDecoder().decode([AppInstance].self, from: data) { needsApplicationRefresh = saved.contains { $0.origin.hasPrefix("系统容器") && !$0.origin.contains("应用分类v2") }; instances = saved.filter { !$0.origin.hasPrefix("系统容器") || ($0.origin.contains("应用分类v2") && ApplicationListingPolicy.rejection(bundlePath: $0.bundlePath, bundleIdentifier: $0.bundleIdentifier, verifiedContainerIdentifier: $0.verifiedContainerIdentifier, dataContainerPath: $0.root.path) == nil) } }
         if !instances.isEmpty { accessMessage = "已载入 \(instances.count) 个应用记录；本次启动尚未复查访问" }
         // iOS can relocate this app's data container after reinstall/update.
         for i in instances.indices where instances[i].origin.hasPrefix("独立测试") {
@@ -227,12 +235,12 @@ import SQLite3
                         let records = XCTContainerBridge.discover(fullScan, error: &bridgeError)
                         if let bridgeError { throw bridgeError }
                         let found = records.compactMap { item -> AppInstance? in
-                            if let reason = ApplicationListingPolicy.rejection(bundlePath: item["bundlePath"], excludedReason: item["excludedReason"]) {
+                            if let reason = ApplicationListingPolicy.rejection(bundlePath: item["bundlePath"], excludedReason: item["excludedReason"], bundleIdentifier: item["id"], verifiedContainerIdentifier: item["verifiedContainerIdentifier"], dataContainerPath: item["path"]) {
                                 XCTContainerBridge.recordDiscoveryExclusion(item["id"] ?? "未知", reason: reason)
                                 return nil
                             }
                             return AppInstance(id: item["id"]!, displayName: item["name"]!, bundleIdentifier: item["id"]!,
-                            version: item["version"], build: item["build"], root: URL(fileURLWithPath: item["path"]!), origin: "系统容器 · 应用分类v1", executableName: item["executable"], bundlePath: item["bundlePath"]) }
+                            version: item["version"], build: item["build"], root: URL(fileURLWithPath: item["path"]!), origin: "系统容器 · 应用分类v2", executableName: item["executable"], bundlePath: item["bundlePath"], verifiedContainerIdentifier: item["verifiedContainerIdentifier"]) }
                         continuation.resume(returning: found)
                     } catch { continuation.resume(throwing: error) }
                 }
@@ -485,6 +493,10 @@ import SQLite3
     func deleteConfiguration(_ copy: BackupManifest) async {
         guard !busy else { return }
         do { try await preferences.delete(copy.id); await refreshRecords() } catch { fail(error) }
+    }
+    func deletePendingBackup(_ pending: PendingConfigurationBackup) async {
+        guard !busy else { return }
+        do { try await preferences.delete(pending.id); await refreshRecords() } catch { fail(error) }
     }
     func exportConfiguration(_ copy: BackupManifest) async throws -> URL {
         guard !busy else { throw PathDiagnostic("分享配置", copy.id.uuidString, "请等待当前操作完成。") }

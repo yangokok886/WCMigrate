@@ -19,6 +19,7 @@ struct PreferencesView: View {
     @State private var shared: SharedZIP?
     @State private var deleting: BackupManifest?
     @State private var resumeBackup: PendingConfigurationBackup?
+    @State private var deletingPending: PendingConfigurationBackup?
     var body: some View {
         List {
             Section {
@@ -45,7 +46,13 @@ struct PreferencesView: View {
                                 Text(pending.instance.displayName)
                                 Text("检查并继续备份 · " + (pending.plistOnly ? "仅 plist" : "全部配置")).font(.caption).foregroundStyle(.secondary)
                             }
-                        }.disabled(store.busy)
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) { deletingPending = pending } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+                        .disabled(store.busy)
                     }
                 }
             }
@@ -84,6 +91,15 @@ struct PreferencesView: View {
         .alert("删除这份本地配置？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("删除配置", role: .destructive) { if let copy = deleting { Task { await store.deleteConfiguration(copy) } }; deleting = nil }
             Button("取消", role: .cancel) { deleting = nil }
+        }
+        .alert("删除未完成的配置备份？", isPresented: Binding(get: { deletingPending != nil }, set: { if !$0 { deletingPending = nil } })) {
+            Button("删除记录", role: .destructive) {
+                if let pending = deletingPending { Task { await store.deletePendingBackup(pending) } }
+                deletingPending = nil
+            }
+            Button("取消", role: .cancel) { deletingPending = nil }
+        } message: {
+            Text("删除后不能继续恢复这次配置备份。")
         }
     }
 }
@@ -245,7 +261,7 @@ struct SettingsView: View {
                 SettingsValueRow(title: "容器状态", icon: "checkmark.shield", value: store.accessMessage, detail: true)
             }
             Section("关于 WCMigrate") {
-                SettingsValueRow(title: "版本号", icon: "info.circle", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.2")
+                    SettingsValueRow(title: "版本号", icon: "info.circle", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.3")
                 SettingsValueRow(title: "作者", icon: "person.crop.circle", value: "Xuegao")
                 Link(destination: URL(string: "https://t.me/xxuegao6")!) {
                     HStack { SettingsRowLabel(title: "TG频道", icon: "paperplane"); Spacer(); Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Color.secondary) }

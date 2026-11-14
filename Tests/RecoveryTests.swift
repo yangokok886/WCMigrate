@@ -148,6 +148,26 @@ final class RecoveryTests: XCTestCase {
         try await fresh.verify(resumed)
         let remaining = try await fresh.pendingBackups(); XCTAssertTrue(remaining.isEmpty)
     }
+    func testDeletingPendingBackupRemovesPartialDirectory() async throws {
+        let a = try app("pending-delete")
+        try put(a, "Library/Preferences/plugin.plist", "pending")
+        let location = root.appendingPathComponent("Copies-delete")
+        let service = PreferencesService(store: location)
+        let work = Task {
+            try await service.save(instance: a, systemVersion: "test", deviceModel: "test", plistOnly: true) { p in
+                if p.completed == 1 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { _ = try await work.value; XCTFail("expected cancellation") } catch is CancellationError {}
+        let pending = try await service.pendingBackups()
+        let id = try XCTUnwrap(pending.first?.id)
+        let partial = location.appendingPathComponent(id.uuidString + ".partial")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path))
+        try await service.delete(id)
+        let remaining = try await service.pendingBackups()
+        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+    }
     func testExchangeMissingTargetRecoversMoveBeforeJournal() async throws {
         let a = try app("source"), b = try app("target")
         try put(a, "one", "one"); try put(a, "two", "two")

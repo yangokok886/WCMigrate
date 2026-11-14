@@ -1,6 +1,6 @@
 # WCMigrate
 
-适配 **iOS 26.0–27.3** 的原生应用沙盒数据迁移工具，主要用于微信及其多开应用。版本 **1.0.2**，支持 iPhone / iPad。27.3 的 LaunchServices 布局已加入适配；该系统版本尚未在 WCMigrate 真机验证。
+适配 **iOS 26.0–27.3** 的原生应用沙盒数据迁移工具，主要用于微信及其多开应用。版本 **1.0.3**，支持 iPhone / iPad。27.3 的 LaunchServices 布局已加入适配；该系统版本尚未在 WCMigrate 真机验证。
 
 [TG频道](https://t.me/xxuegao6) · [GitHub](https://github.com/yangokok886/WCMigrate) · [GPL-3.0-or-later](LICENSE)
 
@@ -50,7 +50,7 @@ xcodebuild -project XChatTransfer.xcodeproj -scheme XChatTransfer \
 ```sh
 SDK26='/absolute/path/iPhoneOS26.0.sdk' \
 XCODE_SOURCE='/Applications/Xcode.app' ./Scripts/build-sdk26.sh
-python3 Scripts/verify-ipa.py build/WCMigrate-1.0.2-sdk26-adhoc.ipa
+python3 Scripts/verify-ipa.py build/WCMigrate-1.0.3-sdk26-adhoc.ipa
 ./Scripts/package-source.sh
 ```
 

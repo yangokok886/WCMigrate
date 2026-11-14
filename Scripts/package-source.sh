@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 mkdir -p build
 python3 - <<'PY'
 import pathlib,zipfile,hashlib,os
-root=pathlib.Path.cwd(); out=root/'build/WCMigrate-1.0.2-source.zip'
+root=pathlib.Path.cwd(); out=root/'build/WCMigrate-1.0.3-source.zip'
 # Publish only source, resources, build scripts and current documentation.
 roots=['App','Core','CSupport','ContainerAccess','Vendor','Resources','Scripts','Tests','UITests','XChatTransfer.xcodeproj','Marketing']
 files=['.gitignore','LICENSE','README.md','CHANGELOG.md','Package.swift','project.yml']

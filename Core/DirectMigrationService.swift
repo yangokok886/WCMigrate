@@ -75,6 +75,13 @@ public actor DirectMigrationService {
         var files: [Item] { items.filter { !$0.directory } }
     }
     // Keep the strict snapshot comparison; report precisely why resuming was refused.
+    private func sameShape(_ lhs: Tree, _ rhs: Tree) -> Bool {
+        guard lhs.items.count == rhs.items.count else { return false }
+        return zip(lhs.items, rhs.items).allSatisfy { a, b in
+            a.relative == b.relative && a.directory == b.directory && a.bytes == b.bytes
+        }
+    }
+
     private func inventoryDifference(expected: Tree, current: Tree) -> String {
         let before = Dictionary(uniqueKeysWithValues: expected.items.map { ($0.relative, $0) })
         let after = Dictionary(uniqueKeysWithValues: current.items.map { ($0.relative, $0) })
@@ -221,6 +228,17 @@ public actor DirectMigrationService {
             }
         }
     }
+    private func sameContents(_ lhs: Tree, at lhsRoot: URL, _ rhs: Tree, at rhsRoot: URL) throws -> Bool {
+        guard lhs.items.count == rhs.items.count else { return false }
+        let r = Dictionary(uniqueKeysWithValues: rhs.items.map { ($0.relative, $0) })
+        for item in lhs.items {
+            guard let other = r[item.relative], item.directory == other.directory, item.bytes == other.bytes else { return false }
+            if !item.directory {
+                guard try equalContents(try child(lhsRoot, item.relative), try child(rhsRoot, item.relative)) else { return false }
+            }
+        }
+        return true
+    }
     private func equalContents(_ a: URL, _ b: URL) throws -> Bool {
         prepareAccess(a); prepareAccess(b)
         let x = XCTOpenReadOnly(a.path), y = XCTOpenReadOnly(b.path)
@@ -233,7 +251,7 @@ public actor DirectMigrationService {
         if relative.isEmpty { return base }
         return try PathSafety.potential(relative, in: base, prepareAccess: prepareAccess)
     }
-    private func tree(root: URL, relative: String, scanned: (Int) -> Void = { _ in }) throws -> Tree {
+    private func tree(root: URL, relative: String, detailed: Bool = true, scanned: (Int) -> Void = { _ in }) throws -> Tree {
         prepareAccess(root); prepareAccess(root.appendingPathComponent(relative))
         let base = try PathSafety.potential(relative, in: root, prepareAccess: prepareAccess)
         var initial = stat()
@@ -266,7 +284,8 @@ public actor DirectMigrationService {
             guard directory || regular else { throw PathDiagnostic("扫描文件类型", url.path, "不支持特殊文件。") }
             items.append(Item(relative: inside, directory: directory,
                 bytes: regular ? Int64(info.st_size) : 0,
-                modified: Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec) - 978_307_200 + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000), inode: UInt64(info.st_ino), device: Int32(info.st_dev)))
+                modified: detailed ? Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec) - 978_307_200 + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000) : .distantPast,
+                inode: detailed ? UInt64(info.st_ino) : 0, device: detailed ? Int32(info.st_dev) : 0))
             scanned(items.count)
             if directory {
                 var fd = XCTOpenDirectoryAt(parent, entry)
@@ -276,7 +295,7 @@ public actor DirectMigrationService {
                 }
                 guard fd >= 0 else { throw PathDiagnostic.system("打开扫描目录", url.path, code: errno) }
                 var opened = stat()
-                guard fstat(fd, &opened) == 0, opened.st_ino == info.st_ino, opened.st_dev == info.st_dev else {
+                guard fstat(fd, &opened) == 0, !detailed || (opened.st_ino == info.st_ino && opened.st_dev == info.st_dev) else {
                     close(fd); throw MigrationFailure.changed
                 }
                 guard let stream = fdopendir(fd) else {
@@ -328,7 +347,7 @@ public actor DirectMigrationService {
         progress(BackupProgress("统计所选目录（不读取文件内容）", 0, 0, 0))
         for m in mappings {
             func scan(_ app: AppInstance, _ path: String) throws -> Tree {
-                let result = try tree(root: app.root, relative: path) { count in
+                let result = try tree(root: app.root, relative: path, detailed: false) { count in
                     let now = Date()
                     if now.timeIntervalSince(lastReport) >= 0.25 {
                         lastReport = now
@@ -350,7 +369,10 @@ public actor DirectMigrationService {
                 var existing = try PathSafety.potential(m.target, in: target.root)
                 while !fm.fileExists(atPath: existing.path) { existing.deleteLastPathComponent() }
                 var info = stat()
-                guard lstat(existing.path, &info) == 0, s.items[0].device == Int32(info.st_dev) else { throw MigrationFailure.exchangeUnsupported }
+                guard lstat(existing.path, &info) == 0 else { throw MigrationFailure.exchangeUnsupported }
+                var sourceInfo = stat()
+                let sourcePath = source.root.appendingPathComponent(m.source).path
+                guard lstat(sourcePath, &sourceInfo) == 0, Int32(info.st_dev) == Int32(sourceInfo.st_dev) else { throw MigrationFailure.exchangeUnsupported }
                 if mode == .exchange { total += t.files.reduce(Int64(0)) { $0 + $1.bytes } }
             }
             sources.append(s); targets.append(t)
@@ -415,26 +437,39 @@ public actor DirectMigrationService {
             guard try fm.attributesOfItem(atPath: current.path)[.type] as? FileAttributeType == .typeDirectory else { throw MigrationFailure.conflict }
         }
     }
+    // The initial inventory intentionally contains only names, types and byte sizes.
+    // Resolve identity and timestamps at the moment a file is about to be changed.
+    private func materialize(_ item: Item, at url: URL) throws -> Item {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, XCTModeIsSymlink(UInt32(info.st_mode)) == 0 else { throw MigrationFailure.changed }
+        let directory = XCTModeIsDirectory(UInt32(info.st_mode)) != 0
+        let regular = XCTModeIsRegular(UInt32(info.st_mode)) != 0
+        guard directory || regular, directory == item.directory else { throw MigrationFailure.changed }
+        guard !directory ? Int64(info.st_size) == item.bytes : true else { throw MigrationFailure.changed }
+        return Item(relative: item.relative, directory: directory, bytes: regular ? Int64(info.st_size) : 0,
+            modified: Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec) - 978_307_200 + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000),
+            inode: UInt64(info.st_ino), device: Int32(info.st_dev))
+    }
     private func checkItem(_ expected: Item?, at url: URL) throws {
         var info = stat()
         if lstat(url.path, &info) != 0 {
             guard expected == nil && errno == ENOENT else { throw MigrationFailure.changed }; return
         }
         guard let expected, XCTModeIsSymlink(UInt32(info.st_mode)) == 0,
-              UInt64(info.st_ino) == expected.inode, Int32(info.st_dev) == expected.device else { throw MigrationFailure.changed }
+              (expected.inode == 0 || (UInt64(info.st_ino) == expected.inode && Int32(info.st_dev) == expected.device)) else { throw MigrationFailure.changed }
         let a = try fm.attributesOfItem(atPath: url.path)
         guard (a[.type] as? FileAttributeType == .typeDirectory) == expected.directory else { throw MigrationFailure.changed }
         if !expected.directory {
-            guard info.st_size == expected.bytes, a[.modificationDate] as? Date == expected.modified else { throw MigrationFailure.changed }
+            guard info.st_size == expected.bytes, expected.modified == .distantPast || a[.modificationDate] as? Date == expected.modified else { throw MigrationFailure.changed }
         }
     }
-    private func hash(_ fd: Int32, output: FileHandle?, progress: (Int64) throws -> Void) throws -> (String, Int64) {
+    private func hash(_ fd: Int32, output: FileHandle?, calculateDigest: Bool = true, progress: (Int64) throws -> Void) throws -> (String, Int64) {
         let input = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         var ctx = CC_SHA256_CTX(); CC_SHA256_Init(&ctx); var size: Int64 = 0; var lastUpdate = Date.distantPast
         while true {
             try Task.checkCancellation()
             let chunk = try input.read(upToCount: 4 * 1_048_576) ?? Data(); if chunk.isEmpty { break }
-            chunk.withUnsafeBytes { _ = CC_SHA256_Update(&ctx, $0.baseAddress, CC_LONG($0.count)) }
+            if calculateDigest { chunk.withUnsafeBytes { _ = CC_SHA256_Update(&ctx, $0.baseAddress, CC_LONG($0.count)) } }
             try output?.write(contentsOf: chunk); size += Int64(chunk.count)
             if Date().timeIntervalSince(lastUpdate) >= 0.2 { lastUpdate = Date(); try progress(size) }
         }
@@ -458,10 +493,12 @@ public actor DirectMigrationService {
         defer { try? fm.removeItem(at: temp) }
         // A successful fclonefileat creates an independent COW snapshot, not a hard link.
         // Do not reread both entire files after the filesystem has already cloned them.
-        var sourceDigest: (String, Int64)?
+        // Fresh copies rely on checked writes, fsync, byte count and source identity.
+        // Content hashing is reserved for ambiguous interrupted copies.
+        var writtenBytes: Int64?
         if !cloned {
             let output = try FileHandle(forWritingTo: temp)
-            do { sourceDigest = try hash(fd, output: output, progress: { try progress($0, false) }); try output.synchronize(); try output.close() }
+            do { writtenBytes = try hash(fd, output: output, calculateDigest: false, progress: { try progress($0 * 2, false) }).1; try output.synchronize(); try output.close() }
             catch { try? output.close(); throw error }
         }
         var after = stat(); var pathname = stat()
@@ -475,12 +512,8 @@ public actor DirectMigrationService {
         guard fstat(check, &copied) == 0, XCTModeIsRegular(UInt32(copied.st_mode)) != 0,
               copied.st_size == before.st_size,
               copied.st_dev != before.st_dev || copied.st_ino != before.st_ino else { throw TransferError.corruptBackup }
-        if let sourceDigest {
-            let verified = try hash(check, output: nil, progress: { try progress(expected.bytes + $0, false) })
-            guard verified == sourceDigest, sourceDigest.1 == before.st_size else { throw TransferError.corruptBackup }
-        } else {
-            try progress(expected.bytes * 2, true)
-        }
+        if let writtenBytes { guard writtenBytes == before.st_size else { throw TransferError.corruptBackup } }
+        try progress(expected.bytes * 2, cloned)
         try Task.checkCancellation()
         try commit()
         guard rename(temp.path, destination.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
@@ -543,7 +576,12 @@ public actor DirectMigrationService {
         if plan.moves == nil {
             var steps: [MoveStep] = []
             for (i, mapping) in plan.summary.mappings.enumerated() {
-                let src = plan.sources[i], dst = plan.targets[i]
+                // The first preflight is intentionally lightweight. Before creating
+                // an immutable move journal, materialize only the selected roots so
+                // resume can distinguish an already-moved tree from an untouched
+                // target with the same names and sizes.
+                let src = try tree(root: plan.source.root, relative: mapping.source, detailed: true)
+                let dst = try tree(root: plan.target.root, relative: mapping.target, detailed: true)
                 let targetItems = Dictionary(uniqueKeysWithValues: dst.items.map { ($0.relative, $0) })
                 let sourcePositions = Dictionary(uniqueKeysWithValues: src.items.enumerated().map { ($0.element.relative, $0.offset) })
                 let targetPositions = Dictionary(uniqueKeysWithValues: dst.items.enumerated().map { ($0.element.relative, $0.offset) })
@@ -567,10 +605,10 @@ public actor DirectMigrationService {
             if !partial && expected.items.count != actual.items.count { return false }
             return actual.items.allSatisfy { item in
                 guard let old = originals[item.relative] else { return false }
-                if item.directory {
-                    return old.directory && old.inode == item.inode && old.device == item.device
-                }
-                return old == item
+                guard old.directory == item.directory, old.bytes == item.bytes else { return false }
+                if old.inode == 0 || old.device == 0 { return true }
+                if old.directory { return old.inode == item.inode && old.device == item.device }
+                return old.inode == item.inode && old.device == item.device && old.modified == item.modified
             }
         }
         // Validate before deleting, then unlink known entries one by one. No recursive
@@ -646,7 +684,7 @@ public actor DirectMigrationService {
         defer { diagnostic("迁移总耗时 · \(String(format: "%.2f", Date().timeIntervalSince(started))) 秒") }
         func monitoredTree(root: URL, relative: String) throws -> Tree {
             var lastReport = Date.distantPast
-            return try tree(root: root, relative: relative) { count in
+            return try tree(root: root, relative: relative, detailed: false) { count in
                 let now = Date()
                 if now.timeIntervalSince(lastReport) >= 0.25 {
                     lastReport = now
@@ -749,15 +787,18 @@ public actor DirectMigrationService {
                 if refreshCopyStaging || (summary.keepSource == false && mode != .exchange) { break }
                 let a = try monitoredTree(root: source.root, relative: m.source), b = try monitoredTree(root: target.root, relative: m.target)
                 if let done = plan.completed[i] {
-                    guard a.items == done[0].items, b.items == done[1].items else { throw PathDiagnostic("续传复查已完成映射", source.root.appendingPathComponent(m.source).path + " ⇄ " + target.root.appendingPathComponent(m.target).path, "已完成项目的目录结构、文件身份、大小或修改时间发生变化，未继续写入。") }
+                    guard sameShape(a, done[0]), sameShape(b, done[1]) else { throw PathDiagnostic("续传复查已完成映射", source.root.appendingPathComponent(m.source).path + " ⇄ " + target.root.appendingPathComponent(m.target).path, "已完成项目的目录结构、文件身份、大小或修改时间发生变化，未继续写入。") }
                 } else if mode == .exchange {
-                    if a.items == plan.targets[i].items && b.items == sources[i].items {
+                    if receipt.exchanged?.contains(where: { $0.source == m.source && $0.target == m.target }) == true {
+                        plan.completed[i] = [a, b] // Receipt journal already records the atomic swap.
+                    } else if try sameContents(a, at: source.root.appendingPathComponent(m.source), plan.targets[i], at: target.root.appendingPathComponent(m.target)) {
                         plan.completed[i] = [a, b] // Kernel swap/move happened before the completion journal.
                     } else {
-                        guard a.items == sources[i].items, b.items == plan.targets[i].items else { throw PathDiagnostic("续传核对转换结果", m.source + " ⇄ " + m.target, "当前两边既不匹配原始状态，也不匹配已交换状态；不能确定结果，未重复交换。") }
+                        guard try sameContents(a, at: source.root.appendingPathComponent(m.source), sources[i], at: source.root.appendingPathComponent(m.source)),
+                              try sameContents(b, at: target.root.appendingPathComponent(m.target), plan.targets[i], at: target.root.appendingPathComponent(m.target)) else { throw PathDiagnostic("续传核对转换结果", m.source + " ⇄ " + m.target, "当前两边既不匹配原始状态，也不匹配已交换状态；不能确定结果，未重复交换。") }
                     }
                 } else {
-                    guard a.items == sources[i].items else { throw PathDiagnostic("续传复查源数据", source.root.appendingPathComponent(m.source).path, inventoryDifference(expected: sources[i], current: a)) }
+                    guard sameShape(a, sources[i]) else { throw PathDiagnostic("续传复查源数据", source.root.appendingPathComponent(m.source).path, inventoryDifference(expected: sources[i], current: a)) }
                     try validatePartial(source: sources[i], original: plan.targets[i], current: b,
                         sourceBase: source.root.appendingPathComponent(m.source), targetBase: target.root.appendingPathComponent(m.target), mode: mode)
                     targets[i] = b
@@ -793,11 +834,12 @@ public actor DirectMigrationService {
             receipt.state = mode == .exchange ? "exchanging" : "transferring"; try persist(receipt)
             var lastReceiptSave = Date.distantPast
             var lastUIUpdate = Date.distantPast
+            var reportedFirstFile = false
             var lastSpaceCheck = Date.distantPast
             var pendingCopyPath: String?
             var clonedFiles = 0
             var copiedFiles = 0
-            defer { diagnostic("复制路径统计 · 系统克隆 \(clonedFiles) 个 · 普通复制并 SHA-256 校验 \(copiedFiles) 个") }
+            defer { diagnostic("复制路径统计 · 系统克隆 \(clonedFiles) 个 · 普通复制（大小及身份核对） \(copiedFiles) 个") }
             func saveCopyProgress(force: Bool = false) throws {
                 if force || Date().timeIntervalSince(lastReceiptSave) >= 1 {
                     try persist(receipt); lastReceiptSave = Date()
@@ -817,8 +859,8 @@ public actor DirectMigrationService {
                 // Resumes still revalidate both sides because they may have
                 // been changed while the app was not running.
                 if resuming != nil && !refreshCopyStaging {
-                    guard try monitoredTree(root: source.root, relative: mapping.source).items == sources[index].items,
-                          try monitoredTree(root: target.root, relative: mapping.target).items == targets[index].items else { throw MigrationFailure.changed }
+                    guard sameShape(try monitoredTree(root: source.root, relative: mapping.source), sources[index]),
+                          sameShape(try monitoredTree(root: target.root, relative: mapping.target), targets[index]) else { throw MigrationFailure.changed }
                 } else {
                     diagnostic("执行前复查 · 使用已完成的预检快照，跳过重复扫描")
                 }
@@ -836,8 +878,8 @@ public actor DirectMigrationService {
                     receipt.exchanged?.append(mapping); receipt.pendingExchange = nil; try persist(receipt)
                     let afterSource = try monitoredTree(root: source.root, relative: mapping.source)
                     let afterTarget = try monitoredTree(root: target.root, relative: mapping.target)
-                    guard afterTarget.items == sources[index].items,
-                          afterSource.items == targets[index].items else { throw MigrationFailure.changed }
+                    guard sameShape(afterTarget, sources[index]),
+                          sameShape(afterSource, targets[index]) else { throw MigrationFailure.changed }
                     receipt.completedFiles += sources[index].files.count + targets[index].files.count
                     receipt.completedBytes += sources[index].files.reduce(0) { $0 + $1.bytes } + targets[index].files.reduce(0) { $0 + $1.bytes }
                     plan.completed[index] = [afterSource, afterTarget]
@@ -869,6 +911,7 @@ public actor DirectMigrationService {
                         else { guard try fm.attributesOfItem(atPath: destination.path)[.type] as? FileAttributeType == .typeDirectory else { throw MigrationFailure.changed } }
                     } else {
                         let file = try child(sourceBase, item.relative)
+                        let exactItem = try materialize(item, at: file)
                         let done = receipt.completedBytes; let count = receipt.completedFiles
                         let old = original[item.relative]
                         if resuming != nil, old?.directory == false, old?.bytes == item.bytes, try equalContents(file, destination) {
@@ -886,7 +929,7 @@ public actor DirectMigrationService {
                             pendingCopyPath = relativeTemporary
                         }
                         var pendingBackup: URL?
-                        let cloned = try copyVerified(source: file, destination: destination, expected: item, temporary: temporary, commit: {
+                        let cloned = try copyVerified(source: file, destination: destination, expected: exactItem, temporary: temporary, commit: {
                             try self.checkItem(old, at: destination)
                             if let old {
                                 // Recheck a directory's complete preimage before moving it
@@ -897,7 +940,7 @@ public actor DirectMigrationService {
                                 let baseline = targets[index].items.filter { $0.relative == item.relative || $0.relative.hasPrefix(prefix) }.map { entry -> Item in
                                     var e = entry; e.relative = e.relative == item.relative ? "" : String(e.relative.dropFirst(prefix.count)); return e
                                 }
-                                guard oldTree.items == baseline else { throw MigrationFailure.changed }
+                                guard self.sameShape(oldTree, Tree(items: baseline)) else { throw MigrationFailure.changed }
                                 }
                                 let backup = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-replace.backup")
                                 var backupInfo = stat()
@@ -915,10 +958,11 @@ public actor DirectMigrationService {
                                 guard let free, free.int64Value > 8 * 1_048_576 else { throw MigrationFailure.insufficientSpace }
                                 lastSpaceCheck = now
                             }
-                            if count <= 1 || now.timeIntervalSince(lastUIUpdate) >= 0.2 {
+                            if (count == 1 && !reportedFirstFile) || now.timeIntervalSince(lastUIUpdate) >= 0.2 {
+                                if count == 1 { reportedFirstFile = true }
                                 let bytePart = summary.bytes > 0 ? Double(done) / Double(summary.bytes) + Double(bytes) / (2 * Double(summary.bytes)) : 0
                                 let filePart = summary.files > 0 ? Double(count) / Double(summary.files) : 0
-                                progress(BackupProgress(cloned ? "系统快速复制 · 核对文件身份" : "复制并校验文件内容", count, summary.files, done + min(bytes, item.bytes), fraction: min(0.98, summary.bytes > 0 ? (bytePart + filePart) / 2 : filePart)))
+                                progress(BackupProgress(cloned ? "系统快速复制 · 核对文件身份" : "复制文件", count, summary.files, done + min(bytes, exactItem.bytes), fraction: min(0.98, summary.bytes > 0 ? (bytePart + filePart) / 2 : filePart)))
                                 lastUIUpdate = now
                             }
                         }
@@ -939,7 +983,7 @@ public actor DirectMigrationService {
                 pendingCopyPath = nil
                 try saveCopyProgress(force: true)
                 let afterSource = try monitoredTree(root: source.root, relative: mapping.source)
-                guard afterSource.items == sources[index].items else { throw MigrationFailure.changed }
+                guard sameShape(afterSource, sources[index]) else { throw PathDiagnostic("复查源数据一致性", source.root.appendingPathComponent(mapping.source).path, inventoryDifference(expected: sources[index], current: afterSource)) }
                 let expected = expectedResult(source: sources[index], target: targets[index], mode: mode)
                 if mode == .replace {
                     for old in targets[index].items.reversed() where !old.relative.isEmpty && expected[old.relative] == nil {
@@ -951,7 +995,7 @@ public actor DirectMigrationService {
                     }
                 }
                 let afterTarget = try monitoredTree(root: target.root, relative: mapping.target)
-                try verifyShape(afterTarget, expected: expected)
+                do { try verifyShape(afterTarget, expected: expected) } catch { throw PathDiagnostic("复查目标数据一致性", target.root.appendingPathComponent(mapping.target).path, inventoryDifference(expected: Tree(items: expected.values.sorted { $0.relative < $1.relative }), current: afterTarget)) }
                 plan.completed[index] = [afterSource, afterTarget]
                 finishPhase()
                 try persistPlan(plan)

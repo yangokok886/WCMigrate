@@ -107,17 +107,22 @@ public actor BackupService {
         defer { try? input.close() }
         var before = stat(); guard fstat(fd, &before) == 0, XCTModeIsRegular(UInt32(before.st_mode)) != 0 else { throw TransferError.unsupportedFile }
         var output: FileHandle?
+        var cloned = false
         if let destination {
-            if XCTCloneFile(fd, destination.path) != 0 {
+            cloned = XCTCloneFile(fd, destination.path) == 0
+            if !cloned {
                 guard fm.createFile(atPath: destination.path, contents: nil) else { throw CocoaError(.fileWriteUnknown) }
                 output = try FileHandle(forWritingTo: destination)
             }
         }
         defer { try? output?.close() }
+        let cloneInput = cloned ? try FileHandle(forReadingFrom: destination!) : nil
+        defer { try? cloneInput?.close() }
+        let reader = cloneInput ?? input
         var hash = CC_SHA256_CTX(); CC_SHA256_Init(&hash); var count: Int64 = 0; var lastUpdate = Date.distantPast
         while true {
             try Task.checkCancellation()
-            let data = try input.read(upToCount: 4 * 1_048_576) ?? Data()
+            let data = try reader.read(upToCount: 4 * 1_048_576) ?? Data()
             if data.isEmpty { break }
             data.withUnsafeBytes { buffer in _ = CC_SHA256_Update(&hash, buffer.baseAddress, CC_LONG(buffer.count)) }; try output?.write(contentsOf: data)
             count += Int64(data.count)
@@ -173,6 +178,16 @@ public actor BackupService {
             for d in before.directories { try fm.createDirectory(at: payload.appendingPathComponent(d), withIntermediateDirectories: true) }
             try journal("copying")
             var files: [FileRecord] = []; var doneBytes: Int64 = 0
+            var lastProgress = Date.distantPast
+            var reportedFirstFile = false
+            var lastSpaceCheck = Date.distantPast
+            func report(_ value: BackupProgress) {
+                let now = Date()
+                if (value.completed == 1 && !reportedFirstFile) || now.timeIntervalSince(lastProgress) >= 0.2 {
+                    if value.completed == 1 { reportedFirstFile = true }
+                    progress(value); lastProgress = now
+                }
+            }
             for p in before.files.keys.sorted() {
                 try Task.checkCancellation()
                 var record = before.files[p]!
@@ -183,42 +198,44 @@ public actor BackupService {
                     let sourceHash = try stream(sourceFile, destination: nil)
                     if try stream(destination, destination: nil) == sourceHash {
                         record.sha256 = sourceHash; files.append(record); doneBytes += record.bytes
-                        progress(BackupProgress("已核验并跳过完成配置", files.count, before.files.count, doneBytes,
-                            fraction: totalBytes > 0 ? Double(doneBytes) / Double(totalBytes) / 3 : nil))
+                        report(BackupProgress("已核验并跳过完成配置", files.count, before.files.count, doneBytes,
+                            fraction: totalBytes > 0 ? Double(doneBytes) / Double(totalBytes) * 0.95 : nil))
                         continue
                     }
                 }
                 record.sha256 = try stream(sourceFile, destination: payload.appendingPathComponent(p)) { bytes in
-                    try self.checkSpace(0)
-                    progress(BackupProgress("复制配置与 SHA-256", doneCount, count, baseBytes + bytes, fraction: totalBytes > 0 ? Double(baseBytes + bytes) / Double(totalBytes) / 3 : nil))
+                    if Date().timeIntervalSince(lastSpaceCheck) >= 1 {
+                        try self.checkSpace(0); lastSpaceCheck = Date()
+                    }
+                    report(BackupProgress("保存配置", doneCount, count, baseBytes + bytes, fraction: totalBytes > 0 ? Double(baseBytes + bytes) / Double(totalBytes) * 0.95 : nil))
                 }
                 files.append(record); doneBytes += record.bytes
-                progress(BackupProgress("复制配置与 SHA-256", files.count, before.files.count, doneBytes, fraction: totalBytes > 0 ? Double(doneBytes) / Double(totalBytes) / 3 : nil))
+                report(BackupProgress("保存配置", files.count, before.files.count, doneBytes, fraction: totalBytes > 0 ? Double(doneBytes) / Double(totalBytes) * 0.95 : nil))
             }
-            try journal("checking-source"); progress(BackupProgress("复查源数据一致性", files.count, files.count, doneBytes, fraction: 1.0 / 3))
-            let after = try inventory(root: source, selections: selections, hashes: true, plistOnly: plistOnly) { processed in
-                progress(BackupProgress("复查源数据 SHA-256", files.count, files.count, doneBytes,
-                    fraction: totalBytes > 0 ? Double(totalBytes + processed) / Double(totalBytes) / 3 : nil))
-            }
-            guard before.directories == after.directories, Set(before.files.keys) == Set(after.files.keys) else { throw TransferError.changedSource }
-            for f in files { guard after.files[f.path] == f else { throw TransferError.changedSource } }
+            try journal("checking-source")
+            progress(BackupProgress("复查源数据一致性", files.count, files.count, doneBytes, fraction: 0.96))
+            // No second full-content pass: stream() already checks the opened source
+            // before/after copying; compare names, sizes and timestamps for the set.
+            let after = try inventory(root: source, selections: selections, hashes: false, plistOnly: plistOnly)
+            guard before == after else { throw TransferError.changedSource }
+            let copied = try inventory(root: payload, selections: selections, hashes: false, plistOnly: plistOnly)
+            guard copied.directories == before.directories, Set(copied.files.keys) == Set(before.files.keys) else { throw TransferError.corruptBackup }
+            for f in files { guard copied.files[f.path]?.bytes == f.bytes else { throw TransferError.corruptBackup } }
             var identity = instance; identity.root = URL(fileURLWithPath: "/"); identity.bookmark = nil
             var manifest = BackupManifest(id: id, instance: identity, created: Date(), systemVersion: systemVersion,
                                           deviceModel: deviceModel, selections: selections.sorted(), directories: before.directories, files: files)
             manifest.plistOnly = plistOnly
             try journal("verifying")
-            progress(BackupProgress("校验备份副本", files.count, files.count, doneBytes, fraction: 2.0 / 3))
+            progress(BackupProgress("校验备份副本", files.count, files.count, doneBytes, fraction: 0.98))
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(manifest).write(to: stage.appendingPathComponent("manifest.json"), options: .atomic)
             let checksums = files.map { "\($0.sha256)  \($0.path)" }.joined(separator: "\n") + "\n"
             try checksums.write(to: stage.appendingPathComponent("checksums.sha256"), atomically: true, encoding: .utf8)
-            try verify(manifest, directory: stage) { processed in
-                progress(BackupProgress("校验配置副本 SHA-256", files.count, files.count, doneBytes,
-                    fraction: totalBytes > 0 ? min(0.99, Double(totalBytes * 2 + processed) / Double(totalBytes) / 3) : nil))
-            }
+            // Persist the digest produced during the single copy/snapshot read.
+            // Explicit verification and imports still validate all SHA-256 values.
             try journal("complete")
             try fm.moveItem(at: stage, to: store.appendingPathComponent(id.uuidString))
-            progress(BackupProgress("文件备份校验完成", files.count, files.count, doneBytes, fraction: 1))
+            progress(BackupProgress("配置保存完成", files.count, files.count, doneBytes, fraction: 1))
             return manifest
         } catch {
             try? journal(error is CancellationError ? "cancelled" : "failed")
@@ -269,5 +286,20 @@ public actor BackupService {
         try fm.createDirectory(at: store, withIntermediateDirectories: true)
         return try fm.contentsOfDirectory(atPath: store.path).filter { $0.hasSuffix(".partial") }.count
     }
-    public func delete(_ id: UUID) throws { try fm.removeItem(at: store.appendingPathComponent(id.uuidString)) }
+    public func delete(_ id: UUID) throws {
+        // Completed backups and interrupted backups use separate directories.
+        // Remove both so the same operation works for either record type.
+        let completed = store.appendingPathComponent(id.uuidString, isDirectory: true)
+        let partial = store.appendingPathComponent(id.uuidString + ".partial", isDirectory: true)
+        var removed = false
+        if fm.fileExists(atPath: completed.path) {
+            try fm.removeItem(at: completed)
+            removed = true
+        }
+        if fm.fileExists(atPath: partial.path) {
+            try fm.removeItem(at: partial)
+            removed = true
+        }
+        guard removed else { throw CocoaError(.fileNoSuchFile) }
+    }
 }
