@@ -72,16 +72,47 @@ public actor DirectMigrationService {
     }
     private struct Tree: Codable {
         var items: [Item]
+        // Large atomic moves keep only the selected root in memory. These totals
+        // are collected while streaming the directory and preserve progress and
+        // space checks without retaining every child entry.
+        var scannedFileCount: Int? = nil
+        var scannedFileBytes: Int64? = nil
+        var scannedLargestFile: Int64? = nil
+        var scannedEntryCount: Int? = nil
+        init(items: [Item], fileCount: Int? = nil, fileBytes: Int64? = nil, largestFile: Int64? = nil, entryCount: Int? = nil) {
+            self.items = items
+            self.scannedFileCount = fileCount
+            self.scannedFileBytes = fileBytes
+            self.scannedLargestFile = largestFile
+            self.scannedEntryCount = entryCount
+        }
         // Avoid allocating a second array every time a large tree only needs a
         // count or byte total. Chat histories can contain hundreds of thousands
         // of entries, so repeated `files` filtering is a measurable CPU spike.
-        var fileCount: Int { items.reduce(into: 0) { if !$1.directory { $0 += 1 } } }
-        var fileBytes: Int64 { items.reduce(into: Int64(0)) { if !$1.directory { $0 += $1.bytes } } }
-        var largestFile: Int64 { items.reduce(0) { max($0, $1.directory ? 0 : $1.bytes) } }
+        var fileCount: Int { scannedFileCount ?? items.reduce(into: 0) { if !$1.directory { $0 += 1 } } }
+        var fileBytes: Int64 { scannedFileBytes ?? items.reduce(into: Int64(0)) { if !$1.directory { $0 += $1.bytes } } }
+        var largestFile: Int64 { scannedLargestFile ?? items.reduce(0) { max($0, $1.directory ? 0 : $1.bytes) } }
+        var entryCount: Int { scannedEntryCount ?? items.count }
+        // Large trees intentionally retain only the selected root. This keeps
+        // the journal bounded while streamed counters remain exact.
+        var isComplete: Bool { scannedEntryCount == nil || scannedEntryCount == items.count }
         var files: [Item] { items.filter { !$0.directory } }
     }
     // Keep the strict snapshot comparison; report precisely why resuming was refused.
     private func sameShape(_ lhs: Tree, _ rhs: Tree) -> Bool {
+        // Incomplete inventories intentionally retain only the selected root.
+        // Comparing just that root would allow a changed child tree to pass a
+        // resume check. The streamed counters are exact and keep this check
+        // bounded for hundreds of thousands of chat files.
+        if !lhs.isComplete || !rhs.isComplete {
+            guard lhs.entryCount == rhs.entryCount,
+                  lhs.fileCount == rhs.fileCount,
+                  lhs.fileBytes == rhs.fileBytes,
+                  lhs.largestFile == rhs.largestFile else { return false }
+            guard let leftRoot = lhs.items.first(where: { $0.relative.isEmpty }),
+                  let rightRoot = rhs.items.first(where: { $0.relative.isEmpty }) else { return lhs.items.isEmpty && rhs.items.isEmpty }
+            return leftRoot.directory == rightRoot.directory && leftRoot.bytes == rightRoot.bytes
+        }
         guard lhs.items.count == rhs.items.count else { return false }
         // Lightweight inventories intentionally keep native directory order. Compare
         // by relative path so a scan does not need an O(n log n) sort just for a check.
@@ -266,7 +297,21 @@ public actor DirectMigrationService {
         if relative.isEmpty { return base }
         return try PathSafety.potential(relative, in: base, prepareAccess: prepareAccess)
     }
-    private func tree(root: URL, relative: String, detailed: Bool = true, scanned: (Int) -> Void = { _ in }) throws -> Tree {
+    private static func guardMemoryPressure(_ phase: String) throws {
+        #if os(iOS)
+        // Jetsam is a hard process kill, so cancellation must happen before the
+        // system reaches the limit. Keep this guard iOS-only; the macOS package
+        // target intentionally has no equivalent API.
+        let available = os_proc_available_memory()
+        if available < 128 * 1_048_576 {
+            throw PathDiagnostic("暂停迁移", phase, "系统可用内存不足（约 \(available / 1_048_576) MB），为避免闪退已停止写入。请关闭其他应用后重试；已写入部分可从任务记录续传。")
+        }
+        #else
+        _ = phase
+        #endif
+    }
+    private func tree(root: URL, relative: String, detailed: Bool = true, retainItems: Bool = true,
+                      scanned: (Int) -> Void = { _ in }) throws -> Tree {
         prepareAccess(root); prepareAccess(root.appendingPathComponent(relative))
         let base = try PathSafety.potential(relative, in: root, prepareAccess: prepareAccess)
         var initial = stat()
@@ -275,64 +320,91 @@ public actor DirectMigrationService {
             return Tree(items: [])
         }
         var items: [Item] = []
+        var scannedEntries = 0
+        var scannedFiles = 0
+        var scannedBytes: Int64 = 0
+        var scannedLargest: Int64 = 0
+        // A full Item contains a path String plus stat metadata. Retaining one
+        // per chat attachment scales badly, so cap the in-memory snapshot.
+        let retentionLimit = 50_000
+        var retainingItems = retainItems
         // Descendants are read relative to open directory descriptors. This avoids
         // resolving every ancestor and probing access again for every single file.
         // No-follow flags and inode checks keep symlink/replacement protection.
-        func walk(_ url: URL, _ inside: String, parent: Int32 = AT_FDCWD, name: String? = nil) throws {
-            try Task.checkCancellation()
-            // A malformed or unexpectedly recursive tree must fail with a useful
-            // diagnostic instead of consuming the process stack until the OS kills it.
-            guard inside.split(separator: "/").count <= 128 else {
-                throw PathDiagnostic("扫描文件树", url.path, "目录层级超过 128 层，已停止扫描以避免递归耗尽。")
-            }
-            let entry = name ?? url.path
-            var info = stat()
-            var result = fstatat(parent, entry, &info, AT_SYMLINK_NOFOLLOW)
-            if result != 0 && (errno == EACCES || errno == EPERM) {
-                prepareAccess(url)
-                result = fstatat(parent, entry, &info, AT_SYMLINK_NOFOLLOW)
-            }
-            guard result == 0 else { throw PathDiagnostic.system("扫描文件树", url.path, code: errno) }
-            guard XCTModeIsSymlink(UInt32(info.st_mode)) == 0 else { throw PathDiagnostic("扫描文件树", url.path, "检测到符号链接；请取消选择该链接或缩小范围。") }
-            let directory = XCTModeIsDirectory(UInt32(info.st_mode)) != 0
-            let regular = XCTModeIsRegular(UInt32(info.st_mode)) != 0
-            guard directory || regular else { throw PathDiagnostic("扫描文件类型", url.path, "不支持特殊文件。") }
-            items.append(Item(relative: inside, directory: directory,
-                bytes: regular ? Int64(info.st_size) : 0,
-                modified: detailed ? Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec) - 978_307_200 + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000) : .distantPast,
-                inode: detailed ? UInt64(info.st_ino) : 0, device: detailed ? Int32(info.st_dev) : 0))
-            scanned(items.count)
-            if directory {
-                var fd = XCTOpenDirectoryAt(parent, entry)
-                if fd < 0 && (errno == EACCES || errno == EPERM) {
+        func walk(_ url: URL, _ inside: String, depth: Int = 0, parent: Int32 = AT_FDCWD, name: String? = nil) throws {
+            try autoreleasepool {
+                try Task.checkCancellation()
+                // A malformed or unexpectedly recursive tree must fail with a useful
+                // diagnostic instead of consuming the process stack until the OS kills it.
+                guard depth <= 128 else {
+                    throw PathDiagnostic("扫描文件树", url.path, "目录层级超过 128 层，已停止扫描以避免递归耗尽。")
+                }
+                let entry = name ?? url.path
+                var info = stat()
+                var result = fstatat(parent, entry, &info, AT_SYMLINK_NOFOLLOW)
+                if result != 0 && (errno == EACCES || errno == EPERM) {
                     prepareAccess(url)
-                    fd = XCTOpenDirectoryAt(parent, entry)
+                    result = fstatat(parent, entry, &info, AT_SYMLINK_NOFOLLOW)
                 }
-                guard fd >= 0 else { throw PathDiagnostic.system("打开扫描目录", url.path, code: errno) }
-                var opened = stat()
-                guard fstat(fd, &opened) == 0, !detailed || (opened.st_ino == info.st_ino && opened.st_dev == info.st_dev) else {
-                    close(fd); throw MigrationFailure.changed
-                }
-                guard let stream = fdopendir(fd) else {
-                    let code = errno; close(fd); throw PathDiagnostic.system("枚举扫描目录", url.path, code: code)
-                }
-                defer { closedir(stream) }
-                // Consume entries directly from the directory stream. Keeping a
-                // second [String] for every directory made a 20-50万 item chat tree
-                // peak memory before the actual migration even started.
-                while true {
-                    try Task.checkCancellation()
-                    errno = 0
-                    guard let record = readdir(stream) else {
-                        guard errno == 0 else { throw PathDiagnostic.system("枚举扫描目录", url.path, code: errno) }
-                        break
+                guard result == 0 else { throw PathDiagnostic.system("扫描文件树", url.path, code: errno) }
+                guard XCTModeIsSymlink(UInt32(info.st_mode)) == 0 else { throw PathDiagnostic("扫描文件树", url.path, "检测到符号链接；请取消选择该链接或缩小范围。") }
+                let directory = XCTModeIsDirectory(UInt32(info.st_mode)) != 0
+                let regular = XCTModeIsRegular(UInt32(info.st_mode)) != 0
+                guard directory || regular else { throw PathDiagnostic("扫描文件类型", url.path, "不支持特殊文件。") }
+                let item = Item(relative: inside, directory: directory,
+                    bytes: regular ? Int64(info.st_size) : 0,
+                    modified: detailed ? Date(timeIntervalSinceReferenceDate: Double(info.st_mtimespec.tv_sec) - 978_307_200 + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000) : .distantPast,
+                    inode: detailed ? UInt64(info.st_ino) : 0, device: detailed ? Int32(info.st_dev) : 0)
+                scannedEntries += 1
+                if scannedEntries & 1023 == 0 { try Self.guardMemoryPressure("扫描目录") }
+                if regular { scannedFiles += 1; scannedBytes += item.bytes; scannedLargest = max(scannedLargest, item.bytes) }
+                if retainingItems || inside.isEmpty {
+                    items.append(item)
+                    if retainingItems && items.count > retentionLimit {
+                        let rootItem = items.first
+                        items.removeAll(keepingCapacity: false)
+                        if let rootItem { items.append(rootItem) }
+                        retainingItems = false
                     }
-                    let childName = withUnsafePointer(to: &record.pointee.d_name) {
-                        $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+                }
+                scanned(scannedEntries)
+                if directory {
+                    var fd = XCTOpenDirectoryAt(parent, entry)
+                    if fd < 0 && (errno == EACCES || errno == EPERM) {
+                        prepareAccess(url)
+                        fd = XCTOpenDirectoryAt(parent, entry)
                     }
-                    guard childName != ".", childName != ".." else { continue }
-                    try walk(url.appendingPathComponent(childName), inside.isEmpty ? childName : inside + "/" + childName,
-                             parent: fd, name: childName)
+                    guard fd >= 0 else { throw PathDiagnostic.system("打开扫描目录", url.path, code: errno) }
+                    var opened = stat()
+                    guard fstat(fd, &opened) == 0, !detailed || (opened.st_ino == info.st_ino && opened.st_dev == info.st_dev) else {
+                        close(fd); throw MigrationFailure.changed
+                    }
+                    guard let stream = fdopendir(fd) else {
+                        let code = errno; close(fd); throw PathDiagnostic.system("枚举扫描目录", url.path, code: code)
+                    }
+                    defer { closedir(stream) }
+                    // Consume entries directly from the directory stream. Keeping a
+                    // second [String] for every directory made a 20-50万 item chat tree
+                    // peak memory before the actual migration even started.
+                    while true {
+                        var finished = false
+                        try autoreleasepool {
+                            try Task.checkCancellation()
+                            errno = 0
+                            guard let record = readdir(stream) else {
+                                guard errno == 0 else { throw PathDiagnostic.system("枚举扫描目录", url.path, code: errno) }
+                                finished = true
+                                return
+                            }
+                            let childName = withUnsafePointer(to: &record.pointee.d_name) {
+                                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+                            }
+                            guard childName != ".", childName != ".." else { return }
+                            try walk(url.appendingPathComponent(childName), inside.isEmpty ? childName : inside + "/" + childName,
+                                     depth: depth + 1, parent: fd, name: childName)
+                        }
+                        if finished { break }
+                    }
                 }
             }
         }
@@ -341,7 +413,7 @@ public actor DirectMigrationService {
         // steps. Lightweight preflight snapshots are compared by path and do not need
         // this expensive full sort.
         if detailed { items.sort { $0.relative < $1.relative } }
-        return Tree(items: items)
+        return Tree(items: items, fileCount: scannedFiles, fileBytes: scannedBytes, largestFile: scannedLargest, entryCount: scannedEntries)
     }
     private func validate(source: AppInstance, target: AppInstance, mappings: [DirectoryMapping], allowMissingSource: Bool = false) throws {
         prepareAccess(source.root); prepareAccess(target.root)
@@ -359,26 +431,40 @@ public actor DirectMigrationService {
         var total: Int64 = 0; var largest: Int64 = 0; var added: Int64 = 0
         var scannedTotal = 0
         var lastReport = Date.distantPast
+        let lightweightMove = mode == .replace && !keepSource
         progress(BackupProgress("统计所选目录（不读取文件内容）", 0, 0, 0))
         for m in mappings {
-            func scan(_ app: AppInstance, _ path: String) throws -> Tree {
-                let result = try tree(root: app.root, relative: path, detailed: false) { count in
+            func scan(_ app: AppInstance, _ path: String, retainItems: Bool) throws -> Tree {
+                let result = try tree(root: app.root, relative: path, detailed: false, retainItems: retainItems) { count in
                     let now = Date()
                     if now.timeIntervalSince(lastReport) >= 0.25 {
                         lastReport = now
                         progress(BackupProgress("统计目录 · 已检查 \(scannedTotal + count) 项 · \(path)", 0, 0, 0))
                     }
                 }
-                scannedTotal += result.items.count
+                scannedTotal += result.entryCount
                 return result
             }
-            let s = try scan(source, m.source)
-            let t = try scan(target, m.target)
+            let s = try scan(source, m.source, retainItems: !lightweightMove)
+            // Replace + source retention is installed atomically when either
+            // side is too large for a bounded item snapshot. The old target's
+            // children are irrelevant to that operation, so keep only streamed
+            // counters and avoid a second huge Swift allocation.
+            let retainTargetItems = !lightweightMove && (mode != .replace || s.isComplete)
+            let t = try scan(target, m.target, retainItems: retainTargetItems)
             guard !s.items.isEmpty else { throw TransferError.invalidPath }
-            let old = Dictionary(uniqueKeysWithValues: t.items.map { ($0.relative, $0) })
-            for item in s.items where !item.directory {
-                total += item.bytes; largest = max(largest, item.bytes)
-                added += max(0, item.bytes - (old[item.relative]?.bytes ?? 0))
+            if !s.isComplete && mode != .replace {
+                throw PathDiagnostic("统计所选目录", source.root.appendingPathComponent(m.source).path,
+                                     "所选目录超过 50,000 项；合并和复杂转换需要逐项保留目录清单，已停止以避免内存压力。请改用替换模式或缩小选择范围。")
+            }
+            if lightweightMove || !s.isComplete {
+                total += s.fileBytes; largest = max(largest, s.largestFile)
+            } else {
+                let old: [String: Item] = Dictionary(uniqueKeysWithValues: t.items.map { ($0.relative, $0) })
+                for item in s.items where !item.directory {
+                    total += item.bytes; largest = max(largest, item.bytes)
+                    added += max(0, item.bytes - (old[item.relative]?.bytes ?? 0))
+                }
             }
             if mode == .exchange || !keepSource {
                 var existing = try PathSafety.potential(m.target, in: target.root)
@@ -399,7 +485,8 @@ public actor DirectMigrationService {
         return (MigrationSummary(id: taskID ?? UUID(), sourceName: source.displayName, targetName: target.displayName,
             sourceBundleID: source.bundleIdentifier, targetBundleID: target.bundleIdentifier,
             files: fileCount, bytes: total, largestFile: largest, targetFiles: targets.reduce(0) { $0 + $1.fileCount },
-            mappings: mappings, targetPreferencesExist: false, mode: mode, keepSource: keepSource), sources, targets)
+            mappings: mappings, targetPreferencesExist: false, mode: mode,
+            inventoryComplete: !lightweightMove && sources.allSatisfy(\.isComplete), keepSource: keepSource), sources, targets)
     }
     public func preview(source: AppInstance, target: AppInstance, mappings: [DirectoryMapping], mode: TransferMode = .replace, keepSource: Bool = true, detailed: Bool = true) throws -> MigrationSummary {
         if detailed { return try preflight(source: source, target: target, mappings: mappings, mode: mode, keepSource: keepSource).0 }
@@ -493,13 +580,39 @@ public actor DirectMigrationService {
         }
     }
     private func hash(_ fd: Int32, output: FileHandle?, calculateDigest: Bool = true, progress: (Int64) throws -> Void) throws -> (String, Int64) {
-        let input = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
-        var ctx = CC_SHA256_CTX(); CC_SHA256_Init(&ctx); var size: Int64 = 0; var lastUpdate = Date.distantPast
+        // Avoid FileHandle.read(upToCount:), which allocates an autoreleased Data for
+        // every chunk. A long migration can process tens of gigabytes; use one
+        // bounded buffer rather than depending on the worker's autorelease lifetime.
+        let outputFD = output?.fileDescriptor ?? -1
+        var buffer = [UInt8](repeating: 0, count: 1 * 1_048_576)
+        var ctx = CC_SHA256_CTX(); CC_SHA256_Init(&ctx)
+        var size: Int64 = 0
+        var lastUpdate = Date.distantPast
         while true {
             try Task.checkCancellation()
-            let chunk = try input.read(upToCount: 4 * 1_048_576) ?? Data(); if chunk.isEmpty { break }
-            if calculateDigest { chunk.withUnsafeBytes { _ = CC_SHA256_Update(&ctx, $0.baseAddress, CC_LONG($0.count)) } }
-            try output?.write(contentsOf: chunk); size += Int64(chunk.count)
+            let count = buffer.withUnsafeMutableBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                while true {
+                    let result = Darwin.read(fd, base, raw.count)
+                    if result >= 0 || errno != EINTR { return result }
+                }
+            }
+            guard count >= 0 else { throw CocoaError(.fileReadUnknown) }
+            if count == 0 { break }
+            try buffer.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { throw CocoaError(.fileReadUnknown) }
+                if calculateDigest { _ = CC_SHA256_Update(&ctx, base, CC_LONG(count)) }
+                if outputFD >= 0 {
+                    var written = 0
+                    while written < count {
+                        let result = Darwin.write(outputFD, base.advanced(by: written), count - written)
+                        if result > 0 { written += result; continue }
+                        if result < 0 && errno == EINTR { continue }
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                }
+            }
+            size += Int64(count)
             if Date().timeIntervalSince(lastUpdate) >= 0.2 { lastUpdate = Date(); try progress(size) }
         }
         try progress(size)
@@ -610,8 +723,9 @@ public actor DirectMigrationService {
             // selected root atomically. Do not expand a huge chat tree into one
             // journal step per child; the filesystem rename already covers the
             // complete subtree and is recoverable as one operation.
-            let useAtomicReplace = plan.summary.mode == .replace && plan.sources.count == plan.summary.mappings.count
-                && plan.sources.allSatisfy { $0.items.count >= 10_000 }
+            let useAtomicReplace = plan.summary.mode == .replace && plan.summary.keepSource == false
+                && plan.summary.inventoryComplete == false
+                && plan.sources.count == plan.summary.mappings.count
             if useAtomicReplace {
                 for (i, mapping) in plan.summary.mappings.enumerated() {
                     steps.append(MoveStep(source: mapping.source, target: mapping.target,
@@ -682,8 +796,9 @@ public actor DirectMigrationService {
         // more times. Root inode checks still protect against moving a changed
         // selection, while deletion is delegated to FileManager so Swift never
         // retains a second recursive inventory of the old target.
-        let useAtomicReplace = plan.summary.mode == .replace && plan.sources.count == plan.summary.mappings.count
-            && plan.sources.allSatisfy { $0.items.count >= 10_000 }
+        let useAtomicReplace = plan.summary.mode == .replace && plan.summary.keepSource == false
+            && plan.summary.inventoryComplete == false
+            && plan.sources.count == plan.summary.mappings.count
         if useAtomicReplace {
             func identity(_ url: URL) -> (UInt64, Int32, Bool)? {
                 var info = stat()
@@ -694,6 +809,13 @@ public actor DirectMigrationService {
             func matchesRoot(_ item: Item?, _ value: (UInt64, Int32, Bool)?) -> Bool {
                 guard let item, let value else { return false }
                 return item.directory == value.2 && item.inode != 0 && item.inode == value.0 && item.device == value.1
+            }
+            func matchesLightweight(_ expected: Tree, _ root: URL, _ relative: String) throws -> Bool {
+                let current = try tree(root: root, relative: relative, detailed: false, retainItems: false)
+                return expected.entryCount == current.entryCount
+                    && expected.fileCount == current.fileCount
+                    && expected.fileBytes == current.fileBytes
+                    && expected.largestFile == current.largestFile
             }
             for (index, step) in (plan.moves ?? []).enumerated() {
                 try Task.checkCancellation()
@@ -728,7 +850,17 @@ public actor DirectMigrationService {
                 // inode is now at the target. Finish cleanup instead of swapping
                 // it back or rescanning the entire subtree.
                 if matchesRoot(expectedSource, currentTarget), !matchesRoot(expectedSource, currentSource) {
-                    if currentSource != nil { try fm.removeItem(at: sourceBase) }
+                    // The old target is still sitting at the source path. Before
+                    // deleting it, compare bounded streaming totals so a user or
+                    // another process cannot inject data between the swap and
+                    // resume. This does not retain the old target's children.
+                    if currentSource != nil {
+                        guard matchesRoot(expectedTarget, currentSource),
+                              try matchesLightweight(plan.targets[mappingIndex], plan.source.root, step.source) else {
+                            throw PathDiagnostic("续传核对旧目标", sourceBase.path, "交换后原目标内容已变化，未删除新增数据。")
+                        }
+                        try fm.removeItem(at: sourceBase)
+                    }
                     plan.completed[mappingIndex] = [plan.sources[mappingIndex], plan.targets[mappingIndex]]
                     receipt.completedFiles += plan.sources[mappingIndex].fileCount
                     receipt.completedBytes += plan.sources[mappingIndex].fileBytes
@@ -740,8 +872,14 @@ public actor DirectMigrationService {
                 }
                 try createParents(of: targetBase, in: plan.target.root)
                 let hadTarget = currentTarget != nil
+                // Commit materialized root identities before the atomic rename.
+                // A process exit after rename must be recognized as committed on
+                // resume, even before the completed-mapping record is written.
+                try persistPlan(plan)
                 let result = hadTarget ? XCTSwapPaths(sourceBase.path, targetBase.path) : XCTMoveExclusive(sourceBase.path, targetBase.path)
                 guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+                diagnostic("直接移动已提交 · " + step.source + " → " + step.target)
+                try Task.checkCancellation()
                 if hadTarget { try fm.removeItem(at: sourceBase) }
                 plan.completed[mappingIndex] = [plan.sources[mappingIndex], plan.targets[mappingIndex]]
                 receipt.completedFiles += plan.sources[mappingIndex].fileCount
@@ -799,6 +937,43 @@ public actor DirectMigrationService {
         return receipt
     }
 
+    // Large replace/copy operations do not need a Swift-side file list. Copy
+    // the selected root into a sibling temporary path, then install it with
+    // the same journaled preimage protocol used by single-file replacement.
+    // FileManager performs the recursive copy without retaining every path in
+    // the actor, which keeps memory bounded for chat histories with hundreds
+    // of thousands of attachments.
+    private func copyLargeReplacement(source: URL, destination: URL, receiptID: UUID,
+                                      targetRoot: URL, progress: @Sendable (String) -> Void) throws {
+        try createParents(of: destination, in: targetRoot)
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receiptID.uuidString + "-root-copy.partial")
+        let backup = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receiptID.uuidString + "-root-replace.backup")
+        var info = stat()
+        guard lstat(temporary.path, &info) != 0, errno == ENOENT,
+              lstat(backup.path, &info) != 0, errno == ENOENT else {
+            throw MigrationFailure.conflict
+        }
+        try persistReplacement(receiptID, temporary: temporary, destination: destination, backup: backup, targetRoot: targetRoot)
+        progress("大目录复制 · 写入临时目录")
+        try Self.guardMemoryPressure("大目录复制")
+        try fm.copyItem(at: source, to: temporary)
+        try Task.checkCancellation()
+        try Self.guardMemoryPressure("大目录复制完成")
+        if lstat(destination.path, &info) == 0 {
+            guard rename(destination.path, backup.path) == 0 else {
+                throw PathDiagnostic.system("暂存原目标", destination.path, code: errno)
+            }
+        } else if errno != ENOENT {
+            throw PathDiagnostic.system("检查目标路径", destination.path, code: errno)
+        }
+        guard rename(temporary.path, destination.path) == 0 else {
+            throw PathDiagnostic.system("安装大目录副本", destination.path, code: errno)
+        }
+        if fm.fileExists(atPath: backup.path) { try fm.removeItem(at: backup) }
+        try persistTemporary(receiptID, path: nil)
+        progress("大目录复制 · 已安装")
+    }
+
     public func migrate(source: AppInstance, target: AppInstance, mappings requestedMappings: [DirectoryMapping], mode requestedMode: TransferMode = .replace, keepSource: Bool = true,
                         preferences: PreferencesService, systemVersion: String, deviceModel: String, allowOverwrite: Bool,
                         configurationID: UUID? = nil, resuming: UUID? = nil, taskID: UUID? = nil,
@@ -812,9 +987,9 @@ public actor DirectMigrationService {
             diagnostic("迁移耗时 · \(phase) · \(String(format: "%.2f", Date().timeIntervalSince(phaseStart))) 秒")
         }
         defer { diagnostic("迁移总耗时 · \(String(format: "%.2f", Date().timeIntervalSince(started))) 秒") }
-        func monitoredTree(root: URL, relative: String) throws -> Tree {
+        func monitoredTree(root: URL, relative: String, retainItems: Bool = true) throws -> Tree {
             var lastReport = Date.distantPast
-            return try tree(root: root, relative: relative, detailed: false) { count in
+            return try tree(root: root, relative: relative, detailed: false, retainItems: retainItems) { count in
                 let now = Date()
                 if now.timeIntervalSince(lastReport) >= 0.25 {
                     lastReport = now
@@ -997,6 +1172,31 @@ public actor DirectMigrationService {
                 finishPhase()
                 phase = "映射 \(index + 1) · \(mode.title)及结果校验"
                 phaseStart = Date()
+                if mode == .replace && summary.keepSource == true && (!sources[index].isComplete || !targets[index].isComplete) {
+                    let progressFiles = receipt.completedFiles
+                    let progressTotal = summary.files
+                    let progressBytes = receipt.completedBytes
+                    try copyLargeReplacement(source: sourceBase, destination: targetBase, receiptID: receipt.id,
+                                             targetRoot: target.root) { message in
+                        progress(BackupProgress(message, progressFiles, progressTotal, progressBytes))
+                    }
+                    let afterSource = try monitoredTree(root: source.root, relative: mapping.source, retainItems: false)
+                    let afterTarget = try monitoredTree(root: target.root, relative: mapping.target, retainItems: false)
+                    guard afterSource.fileCount == sources[index].fileCount,
+                          afterSource.fileBytes == sources[index].fileBytes,
+                          afterTarget.fileCount == sources[index].fileCount,
+                          afterTarget.fileBytes == sources[index].fileBytes else {
+                        throw PathDiagnostic("复查大目录替换结果", targetBase.path,
+                                             "来源或目标的文件数量、总大小与预检不一致，未继续处理。")
+                    }
+                    receipt.completedFiles += sources[index].fileCount
+                    receipt.completedBytes += sources[index].fileBytes
+                    plan.completed[index] = [afterSource, afterTarget]
+                    try persistPlan(plan); try persist(receipt)
+                    progress(BackupProgress("大目录替换完成", receipt.completedFiles, summary.files,
+                                            receipt.completedBytes, fraction: summary.bytes > 0 ? Double(receipt.completedBytes) / Double(summary.bytes) : nil))
+                    continue
+                }
                 let original = Dictionary(uniqueKeysWithValues: targets[index].items.map { ($0.relative, $0) })
                 if mode == .exchange {
                     try createParents(of: targetBase, in: target.root)
@@ -1019,94 +1219,102 @@ public actor DirectMigrationService {
                 }
                 var replacedDirectories: Set<String> = []
                 for item in sources[index].items {
-                    try Task.checkCancellation()
-                    let destination = try child(targetBase, item.relative)
-                    try createParents(of: destination, in: target.root)
-                    if item.directory {
-                        if let old = original[item.relative], !old.directory {
-                            try checkItem(old, at: destination)
-                            let temporaryDirectory = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-directory.partial")
-                            let backup = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-replace.backup")
-                            var info = stat()
-                            guard lstat(temporaryDirectory.path, &info) != 0, errno == ENOENT,
-                                  lstat(backup.path, &info) != 0, errno == ENOENT else { throw MigrationFailure.conflict }
-                            try persistReplacement(receipt.id, temporary: temporaryDirectory, destination: destination, backup: backup, targetRoot: target.root)
-                            try fm.createDirectory(at: temporaryDirectory, withIntermediateDirectories: false)
-                            guard rename(destination.path, backup.path) == 0 else { throw PathDiagnostic.system("暂存原目标", destination.path, code: errno) }
-                            guard rename(temporaryDirectory.path, destination.path) == 0 else { throw PathDiagnostic.system("安装目标目录", destination.path, code: errno) }
-                            try fm.removeItem(at: backup)
-                            try persistTemporary(receipt.id, path: nil)
-                        }
-                        if !fm.fileExists(atPath: destination.path) { prepareAccess(destination.deletingLastPathComponent()); try fm.createDirectory(at: destination, withIntermediateDirectories: false) }
-                        else { guard try fm.attributesOfItem(atPath: destination.path)[.type] as? FileAttributeType == .typeDirectory else { throw MigrationFailure.changed } }
-                    } else {
-                        let file = try child(sourceBase, item.relative)
-                        let exactItem = try materialize(item, at: file)
-                        let done = receipt.completedBytes; let count = receipt.completedFiles
-                        let old = original[item.relative]
-                        if resuming != nil, old?.directory == false, old?.bytes == item.bytes, try equalContents(file, destination) {
-                            receipt.completedFiles += 1; receipt.completedBytes += item.bytes; try saveCopyProgress()
-                            progress(BackupProgress("已核验并跳过完成文件", receipt.completedFiles, summary.files, receipt.completedBytes,
-                                fraction: summary.bytes > 0 ? min(0.98, Double(receipt.completedBytes) / Double(summary.bytes)) : nil))
-                            continue
-                        }
-                        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-copy.partial")
-                        let relativeTemporary = String(temporary.path.dropFirst(target.root.path.count + 1))
-                        // A serial copy reuses one temporary name per directory. Commit its
-                        // recovery location before use, once per directory rather than per file.
-                        if pendingCopyPath != relativeTemporary {
-                            try persistTemporary(receipt.id, path: relativeTemporary)
-                            pendingCopyPath = relativeTemporary
-                        }
-                        var pendingBackup: URL?
-                        let cloned = try copyVerified(source: file, destination: destination, expected: exactItem, temporary: temporary, commit: {
-                            try self.checkItem(old, at: destination)
-                            if let old {
-                                // Recheck a directory's complete preimage before moving it
-                                // aside. The backup rename itself is atomic and journaled.
-                                if old.directory {
-                                let oldTree = try self.tree(root: target.root, relative: mapping.target + (item.relative.isEmpty ? "" : "/" + item.relative))
-                                let prefix = item.relative.isEmpty ? "" : item.relative + "/"
-                                let baseline = targets[index].items.filter { $0.relative == item.relative || $0.relative.hasPrefix(prefix) }.map { entry -> Item in
-                                    var e = entry; e.relative = e.relative == item.relative ? "" : String(e.relative.dropFirst(prefix.count)); return e
-                                }
-                                guard self.sameShape(oldTree, Tree(items: baseline)) else { throw MigrationFailure.changed }
-                                }
+                    try autoreleasepool {
+                        try Task.checkCancellation()
+                        let destination = try child(targetBase, item.relative)
+                        try createParents(of: destination, in: target.root)
+                        if item.directory {
+                            if let old = original[item.relative], !old.directory {
+                                try checkItem(old, at: destination)
+                                let temporaryDirectory = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-directory.partial")
                                 let backup = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-replace.backup")
-                                var backupInfo = stat()
-                                guard lstat(backup.path, &backupInfo) != 0, errno == ENOENT else { throw MigrationFailure.conflict }
-                                try self.persistReplacement(receipt.id, temporary: temporary, destination: destination, backup: backup, targetRoot: target.root)
-                                guard rename(destination.path, backup.path) == 0 else {
-                                    throw PathDiagnostic.system("暂存原目标", destination.path, code: errno)
+                                var info = stat()
+                                guard lstat(temporaryDirectory.path, &info) != 0, errno == ENOENT,
+                                      lstat(backup.path, &info) != 0, errno == ENOENT else { throw MigrationFailure.conflict }
+                                try persistReplacement(receipt.id, temporary: temporaryDirectory, destination: destination, backup: backup, targetRoot: target.root)
+                                try fm.createDirectory(at: temporaryDirectory, withIntermediateDirectories: false)
+                                guard rename(destination.path, backup.path) == 0 else { throw PathDiagnostic.system("暂存原目标", destination.path, code: errno) }
+                                guard rename(temporaryDirectory.path, destination.path) == 0 else { throw PathDiagnostic.system("安装目标目录", destination.path, code: errno) }
+                                try fm.removeItem(at: backup)
+                                try persistTemporary(receipt.id, path: nil)
+                                pendingCopyPath = nil
+                            }
+                            if !fm.fileExists(atPath: destination.path) { prepareAccess(destination.deletingLastPathComponent()); try fm.createDirectory(at: destination, withIntermediateDirectories: false) }
+                            else { guard try fm.attributesOfItem(atPath: destination.path)[.type] as? FileAttributeType == .typeDirectory else { throw MigrationFailure.changed } }
+                        } else {
+                            let file = try child(sourceBase, item.relative)
+                            let exactItem = try materialize(item, at: file)
+                            let done = receipt.completedBytes; let count = receipt.completedFiles
+                            let old = original[item.relative]
+                            if resuming != nil, old?.directory == false, old?.bytes == item.bytes, try equalContents(file, destination) {
+                                receipt.completedFiles += 1; receipt.completedBytes += item.bytes; try saveCopyProgress()
+                                progress(BackupProgress("已核验并跳过完成文件", receipt.completedFiles, summary.files, receipt.completedBytes,
+                                    fraction: summary.bytes > 0 ? min(0.98, Double(receipt.completedBytes) / Double(summary.bytes)) : nil))
+                                return
+                            }
+                            let temporary = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-copy.partial")
+                            let relativeTemporary = String(temporary.path.dropFirst(target.root.path.count + 1))
+                            // A serial copy reuses one temporary name per directory. Commit its
+                            // recovery location before use, once per directory rather than per file.
+                            if pendingCopyPath != relativeTemporary {
+                                try persistTemporary(receipt.id, path: relativeTemporary)
+                                pendingCopyPath = relativeTemporary
+                            }
+                            var pendingBackup: URL?
+                            let cloned = try copyVerified(source: file, destination: destination, expected: exactItem, temporary: temporary, commit: {
+                                try self.checkItem(old, at: destination)
+                                if let old {
+                                    // Recheck a directory's complete preimage before moving it
+                                    // aside. The backup rename itself is atomic and journaled.
+                                    if old.directory {
+                                    let oldTree = try self.tree(root: target.root, relative: mapping.target + (item.relative.isEmpty ? "" : "/" + item.relative))
+                                    let prefix = item.relative.isEmpty ? "" : item.relative + "/"
+                                    let baseline = targets[index].items.filter { $0.relative == item.relative || $0.relative.hasPrefix(prefix) }.map { entry -> Item in
+                                        var e = entry; e.relative = e.relative == item.relative ? "" : String(e.relative.dropFirst(prefix.count)); return e
+                                    }
+                                    guard self.sameShape(oldTree, Tree(items: baseline)) else { throw MigrationFailure.changed }
+                                    }
+                                    let backup = destination.deletingLastPathComponent().appendingPathComponent(".xct-" + receipt.id.uuidString + "-replace.backup")
+                                    var backupInfo = stat()
+                                    guard lstat(backup.path, &backupInfo) != 0, errno == ENOENT else { throw MigrationFailure.conflict }
+                                    try self.persistReplacement(receipt.id, temporary: temporary, destination: destination, backup: backup, targetRoot: target.root)
+                                    guard rename(destination.path, backup.path) == 0 else {
+                                        throw PathDiagnostic.system("暂存原目标", destination.path, code: errno)
+                                    }
+                                    pendingBackup = backup
                                 }
-                                pendingBackup = backup
+                            }) { bytes, cloned in
+                                let now = Date()
+                                if now.timeIntervalSince(lastSpaceCheck) >= 1 {
+                                    let free = try self.fm.attributesOfFileSystem(forPath: target.root.path)[.systemFreeSize] as? NSNumber
+                                    guard let free, free.int64Value > 8 * 1_048_576 else { throw MigrationFailure.insufficientSpace }
+                                    lastSpaceCheck = now
+                                }
+                                if (count == 1 && !reportedFirstFile) || now.timeIntervalSince(lastUIUpdate) >= 0.2 {
+                                    if count == 1 { reportedFirstFile = true }
+                                    let bytePart = summary.bytes > 0 ? Double(done) / Double(summary.bytes) + Double(bytes) / (2 * Double(summary.bytes)) : 0
+                                    let filePart = summary.files > 0 ? Double(count) / Double(summary.files) : 0
+                                    progress(BackupProgress(cloned ? "系统快速复制 · 核对文件身份" : "复制文件", count, summary.files, done + min(bytes, exactItem.bytes), fraction: min(0.98, summary.bytes > 0 ? (bytePart + filePart) / 2 : filePart)))
+                                    lastUIUpdate = now
+                                }
                             }
-                        }) { bytes, cloned in
-                            let now = Date()
-                            if now.timeIntervalSince(lastSpaceCheck) >= 1 {
-                                let free = try self.fm.attributesOfFileSystem(forPath: target.root.path)[.systemFreeSize] as? NSNumber
-                                guard let free, free.int64Value > 8 * 1_048_576 else { throw MigrationFailure.insufficientSpace }
-                                lastSpaceCheck = now
+                            if let pendingBackup {
+                                if fm.fileExists(atPath: pendingBackup.path) { try fm.removeItem(at: pendingBackup) }
                             }
-                            if (count == 1 && !reportedFirstFile) || now.timeIntervalSince(lastUIUpdate) >= 0.2 {
-                                if count == 1 { reportedFirstFile = true }
-                                let bytePart = summary.bytes > 0 ? Double(done) / Double(summary.bytes) + Double(bytes) / (2 * Double(summary.bytes)) : 0
-                                let filePart = summary.files > 0 ? Double(count) / Double(summary.files) : 0
-                                progress(BackupProgress(cloned ? "系统快速复制 · 核对文件身份" : "复制文件", count, summary.files, done + min(bytes, exactItem.bytes), fraction: min(0.98, summary.bytes > 0 ? (bytePart + filePart) / 2 : filePart)))
-                                lastUIUpdate = now
+                            // A replacement uses the same journal for its preimage.
+                            // Otherwise keep the reusable temp path recorded until this
+                            // directory finishes; clearing it per file doubled fsyncs.
+                            if pendingBackup != nil {
+                                try persistTemporary(receipt.id, path: nil)
+                                pendingCopyPath = nil
                             }
+                            if cloned { clonedFiles += 1 } else { copiedFiles += 1 }
+                            // Keep the last pending path until the next file; after rename it no longer
+                            // exists. Resume already handles ENOENT and rechecks actual file contents.
+                            if old?.directory == true { replacedDirectories.insert(item.relative) }
+                            receipt.completedFiles += 1; receipt.completedBytes += item.bytes
+                            try saveCopyProgress()
                         }
-                        if let pendingBackup {
-                            if fm.fileExists(atPath: pendingBackup.path) { try fm.removeItem(at: pendingBackup) }
-                        }
-                        try persistTemporary(receipt.id, path: nil)
-                        pendingCopyPath = nil
-                        if cloned { clonedFiles += 1 } else { copiedFiles += 1 }
-                        // Keep the last pending path until the next file; after rename it no longer
-                        // exists. Resume already handles ENOENT and rechecks actual file contents.
-                        if old?.directory == true { replacedDirectories.insert(item.relative) }
-                        receipt.completedFiles += 1; receipt.completedBytes += item.bytes
-                        try saveCopyProgress()
                     }
                 }
                 try persistTemporary(receipt.id, path: nil)

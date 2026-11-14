@@ -86,3 +86,66 @@ extension MigrationPerformanceTests {
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: targetDir.path).count, 10_000)
     }
 }
+
+extension MigrationPerformanceTests {
+    private final class PendingJournalObserver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last: Data?
+        private var installations = 0
+        let path: URL
+        init(path: URL) { self.path = path }
+        func observe() {
+            lock.lock(); defer { lock.unlock() }
+            guard let data = try? Data(contentsOf: path), data != last else { return }
+            last = data
+            if (try? JSONDecoder().decode(String?.self, from: data)) != nil { installations += 1 }
+        }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return installations }
+    }
+
+    func testCopyReusesPendingJournalWithinDirectory() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        for url in [a, b] { try fm.createDirectory(at: url.appendingPathComponent("Documents"), withIntermediateDirectories: true) }
+        for i in 0..<40 { try Data([UInt8(i)]).write(to: a.appendingPathComponent("Documents/\(i).bin")) }
+        let taskID = UUID(), store = root.appendingPathComponent("tasks")
+        let observer = PendingJournalObserver(path: store.appendingPathComponent("Plans/\(taskID.uuidString).pending"))
+        let service = DirectMigrationService(store: store, preferCloning: false, prepareAccess: { _ in observer.observe() })
+        let receipt = try await service.migrate(
+            source: AppInstance(displayName: "a", bundleIdentifier: "test.a", root: a, origin: "fixture"),
+            target: AppInstance(displayName: "b", bundleIdentifier: "test.b", root: b, origin: "fixture"),
+            mappings: [DirectoryMapping(source: "Documents", target: "Documents")], keepSource: true,
+            preferences: PreferencesService(store: root.appendingPathComponent("configs")),
+            systemVersion: "test", deviceModel: "test", allowOverwrite: true, taskID: taskID, progress: { _ in })
+        XCTAssertEqual(receipt.state, "filesVerified")
+        XCTAssertEqual(observer.count, 1, "Fresh files in one directory must share a durable pending path")
+        for i in 0..<40 {
+            XCTAssertEqual(try Data(contentsOf: b.appendingPathComponent("Documents/\(i).bin")), Data([UInt8(i)]))
+            XCTAssertTrue(fm.fileExists(atPath: a.appendingPathComponent("Documents/\(i).bin").path))
+        }
+    }
+
+    func testBufferedCopyPreservesMultiChunkFileAndTail() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        for url in [a, b] { try fm.createDirectory(at: url.appendingPathComponent("Documents"), withIntermediateDirectories: true) }
+        // Includes repeated full 1 MiB reads, a partial final read, and a zero-byte file.
+        let data = Data((0..<(17 * 1_048_576 + 137)).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        try data.write(to: a.appendingPathComponent("Documents/large.img"))
+        try Data().write(to: a.appendingPathComponent("Documents/empty"))
+        let service = DirectMigrationService(store: root.appendingPathComponent("tasks"), preferCloning: false)
+        let receipt = try await service.migrate(
+            source: AppInstance(displayName: "a", bundleIdentifier: "test.a", root: a, origin: "fixture"),
+            target: AppInstance(displayName: "b", bundleIdentifier: "test.b", root: b, origin: "fixture"),
+            mappings: [DirectoryMapping(source: "Documents", target: "Documents")], keepSource: true,
+            preferences: PreferencesService(store: root.appendingPathComponent("configs")),
+            systemVersion: "test", deviceModel: "test", allowOverwrite: true, progress: { _ in })
+        XCTAssertEqual(receipt.completedBytes, Int64(data.count))
+        XCTAssertEqual(try Data(contentsOf: b.appendingPathComponent("Documents/large.img")), data)
+        XCTAssertEqual(try Data(contentsOf: b.appendingPathComponent("Documents/empty")).count, 0)
+    }
+}

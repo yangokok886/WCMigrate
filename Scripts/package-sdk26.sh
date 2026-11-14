@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-PRODUCT="$ROOT/build/sdk26-device/Build/Products/Release-iphoneos/XChatTransfer.app"
+PRODUCT="${PRODUCT_OVERRIDE:-$ROOT/build/sdk26-device/Build/Products/Release-iphoneos/XChatTransfer.app}"
 STAGE="$ROOT/build/sdk26-package"
 APP="$STAGE/Payload/XChatTransfer.app"
 IPA="${IPA_OUTPUT:-$ROOT/build/WCMigrate-1.0.3-sdk26-adhoc.ipa}"
